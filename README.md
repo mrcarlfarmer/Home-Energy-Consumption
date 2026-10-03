@@ -15,6 +15,8 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 
 ## Run on a Raspberry Pi
 
+**Using Portainer?** Follow the [Portainer installation plan](docs/portainer-installation.md) and its [ready-to-paste stack](deploy/portainer-stack.yml), including migration from the local trial.
+
 1. Install Docker Engine and the Compose plugin on a **64-bit** OS.
 2. Follow [deployment](docs/deployment.md) to create an administrator password file and a locally trusted HTTPS certificate. Never put real secrets in Git.
 3. Copy `.env.example` to `.env`, set your Pi's LAN address, certificate paths, trusted hostnames and HTTPS origins.
@@ -26,6 +28,7 @@ The device ID is the **electricity smart meter EUI-64**, not the Home Mini seria
 ## Documentation
 
 - [Deployment and HTTPS](docs/deployment.md)
+- [Portainer installation and configuration](docs/portainer-installation.md)
 - [Architecture](docs/architecture.md)
 - [API contracts](docs/api.md)
 - [Analytics methodology](docs/analytics-methodology.md)
