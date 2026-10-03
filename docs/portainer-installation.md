@@ -10,19 +10,19 @@ Build from **`main`**, which contains the application, polling controls, short c
 
 ### Values to choose
 
-The Pi's reserved LAN address is **`192.168.1.2`** and is used throughout this guide. Replace the SSH username and review the remaining example hostname, storage path and port before running commands.
+The Pi's reserved LAN address is **`192.168.1.2`** and its chosen application hostname is **`home.energy`**. Both are used throughout this guide. Replace the SSH username and review the storage path and available host port before running commands.
 
 | Setting | Value / example | Purpose |
 |---|---|---|
 | Pi SSH user | `YOUR_PI_SSH_USER` | Your existing SSH account; not necessarily `pi` |
 | `PI_LAN_IP` | `192.168.1.2` | Confirmed reserved IPv4 address |
-| `ENERGY_HOSTNAME` | `energy.home.arpa` | Local DNS name pointing to the Pi |
+| `ENERGY_HOSTNAME` | `home.energy` | Chosen hostname; configure local DNS to point to the Pi |
 | `HTTPS_PORT` | `8443` | Published app port; change if already occupied |
 | `ENERGY_ROOT` | `/opt/home-energy` | Local storage on the Pi, preferably SSD-backed |
 | `ENERGY_IMAGE` | `home-energy-monitor:pi-<commit>` | Use the exact tag printed by the build below |
 | Portainer stack name | `home-energy` | Used by the operational examples |
 
-With the proposed local DNS name, the address is **`https://energy.home.arpa:8443`**. You can also use **`https://192.168.1.2:8443`** when the certificate includes that IP address. Portainer's own HTTPS certificate does not automatically cover this separate application.
+With the chosen hostname, the address is **`https://home.energy:8443`**. You can also use **`https://192.168.1.2:8443`** when the certificate includes that IP address. Portainer's own HTTPS certificate does not automatically cover this separate application.
 
 ## 1. Check the Pi
 
@@ -45,7 +45,26 @@ The runtime limit is 140 MiB, but **image building, Docker, Portainer and the OS
 
 Install Git and the Buildx plugin if missing, using your existing Docker installation's package source. For Docker's official Debian/Raspberry Pi OS repository, the plugin package is `docker-buildx-plugin`; do not mix Docker CE and distro Docker packages blindly. A Compose CLI on the Pi is optional for this Portainer workflow.
 
-Keep the DHCP reservation for `192.168.1.2` and configure the local DNS entry if using the hostname. Without local DNS, use `https://192.168.1.2:8443`; keep the chosen hostname in the certificate for the container health probe. Check the published port is free with `sudo ss -ltnp`.
+Keep the DHCP reservation for `192.168.1.2` and configure a local DNS A record mapping `home.energy` to `192.168.1.2`. Verify resolution from each browser device with `nslookup home.energy`. The `.energy` suffix is a public TLD, not a reserved private namespace: if you do not control this domain, you need a reliable local DNS override and must not rely on public resolution. A browser configured to bypass your LAN DNS may need its DNS settings adjusted.
+
+Without local DNS, use `https://192.168.1.2:8443`; keep `home.energy` in the certificate for the container health probe.
+
+### Sharing the Pi with other containers
+
+Sharing `192.168.1.2` is normal. Each service needs a different published **host IP/port** combination; containers can all use the same internal port because they have separate network namespaces.
+
+Check existing host ports on the Pi:
+
+```sh
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+sudo ss -ltnp
+```
+
+Keep `HTTPS_PORT=8443` if that host port is free. If it is occupied, choose another free port, for example `HTTPS_PORT=8444`. The stack then publishes `192.168.1.2:8444` to container port `8443`, and the URL becomes `https://home.energy:8444`. Trusted origins are updated automatically from the same variable; the internal port and certificate SAN names do not change.
+
+DNS maps the hostname to the IP, not to a port. Use `home.energy` specifically for this app and keep other services on their existing hostnames/IP URLs. Browser cookies and HSTS are hostname-scoped, not isolated by port, so sharing the exact hostname with unrelated services can have side effects, particularly for plain-HTTP services.
+
+Allow RAM for all existing containers, Docker, Portainer and the OS in addition to this app's 140 MiB limit. No additional Pi IP or Docker host-network mode is required.
 
 Do not forward the application port on your router. Bind only to the Pi's LAN address and use Docker-aware firewall rules or network ACLs if needed; do not assume a host UFW rule alone filters Docker-published ports.
 
@@ -98,7 +117,7 @@ install -d -m 700 "$HOME/energy-install"
 
 Do not use NFS/SMB for SQLite WAL. If using an SSD mount, ensure it is mounted before Docker starts. All bind paths in the stack refer to the **Pi**, even if Portainer itself runs elsewhere. Missing paths deliberately fail rather than creating empty, root-owned directories.
 
-Obtain a leaf certificate and key from your trusted local CA. The certificate must include both `energy.home.arpa` and the actual Pi IP in its SANs. Do not reuse the Windows test certificate: it only covers localhost.
+Obtain a leaf certificate and key from your trusted local CA. The certificate must include both `home.energy` and `192.168.1.2` in its SANs. Do not reuse the Windows test certificate: it only covers localhost.
 
 For a personal LAN, an explicit, manually maintained option is mkcert on your administration PC. It is a development/local-trust tool, not a public-production certificate service. Prefer your existing managed CA if available. Installing its CA changes that PC's trust store, so do this deliberately:
 
@@ -111,7 +130,7 @@ $PiUser = "YOUR_PI_SSH_USER"
 $SshTarget = "${PiUser}@${PiHost}"
 New-Item -ItemType Directory -Force .\secrets\pi | Out-Null
 mkcert -install
-mkcert -cert-file .\secrets\pi\energy.pem -key-file .\secrets\pi\energy-key.pem energy.home.arpa $PiHost
+mkcert -cert-file .\secrets\pi\energy.pem -key-file .\secrets\pi\energy-key.pem home.energy $PiHost
 ssh $SshTarget 'install -d -m 700 "$HOME/energy-install"'
 scp .\secrets\pi\energy.pem .\secrets\pi\energy-key.pem "${SshTarget}:energy-install/"
 ```
@@ -204,7 +223,7 @@ This retains the Octopus key, selected meter, polling configuration and readings
 ENERGY_IMAGE=home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
-ENERGY_HOSTNAME=energy.home.arpa
+ENERGY_HOSTNAME=home.energy
 HTTPS_PORT=8443
 ```
 
@@ -217,7 +236,7 @@ The container retains the development deployment's hardening: non-root user, rea
 
 ## 7. First login and acceptance
 
-Open `https://energy.home.arpa:8443` (or your actual IP/port) directly in a browser. The certificate should be trusted with a matching hostname; do not treat clicking through a warning as completing the HTTPS setup.
+Open `https://home.energy:8443` (or your selected host port) directly in a browser after verifying local DNS resolves it to `192.168.1.2`. The certificate should be trusted with a matching hostname; do not treat clicking through a warning as completing the HTTPS setup.
 
 For a fresh database, sign in using the bootstrap password, enter your Octopus API key/account, discover and select the meter, save settings, then click **Start polling**. For an imported database, use the password from the reset step; saved polling may already be enabled.
 

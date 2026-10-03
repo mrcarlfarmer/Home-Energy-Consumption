@@ -21,14 +21,14 @@ unset PASSWORD
 
 Use a long unique password. It bootstraps the administrator hash only on the first database initialization. Updating this file after initialization does not change an existing password; use the reset procedure in the operations guide.
 
-Obtain a certificate from your trusted local CA, with SANs for the DNS names and/or IP addresses that you will actually visit. The Pi's reserved LAN address is `192.168.1.2`; `energy.home.arpa` is a proposed local DNS name. For example, using an already installed `mkcert`:
+Obtain a certificate from your trusted local CA, with SANs for the DNS names and/or IP addresses that you will actually visit. The Pi's reserved LAN address is `192.168.1.2` and the chosen hostname is `home.energy`. For example, using an already installed `mkcert`:
 
 ```sh
 mkcert -install
-mkcert -cert-file secrets/energy.pem -key-file secrets/energy-key.pem energy.home.arpa 192.168.1.2
+mkcert -cert-file secrets/energy.pem -key-file secrets/energy-key.pem home.energy 192.168.1.2
 ```
 
-Configure local DNS so `energy.home.arpa` resolves to the Pi. Install **only the CA certificate**, never its private key, into the trust store of each browser device. Never copy the CA private key into the repository/container. A self-signed certificate without appropriate client trust is not a production substitute.
+Configure local DNS so `home.energy` resolves to `192.168.1.2`. The `.energy` suffix is a public TLD, not a reserved private namespace; if you do not control this domain, ensure your browser devices use the intended local DNS override rather than public resolution. Install **only the CA certificate**, never its private key, into the trust store of each browser device. Never copy the CA private key into the repository/container. A self-signed certificate without appropriate client trust is not a production substitute.
 
 The container runs as UID/GID 10001. Secret bind mounts must be readable by that UID. For Linux with the example files:
 
@@ -65,6 +65,8 @@ docker compose logs --tail 50 energy
 The named volume receives `/data`'s private UID 10001 ownership on initial creation. If using a pre-existing/bind-mounted data directory instead, provision correct ownership before starting.
 
 Only port 8443 is published. Restrict it with the host firewall to the trusted LAN. Do not create router port-forwarding rules. For future remote access use an authenticated VPN/HTTPS access layer and deliberately revise the trusted Host/Origin configuration.
+
+Other containers can share the Pi's IP using different published ports. If 8443 is already occupied, the [Portainer stack](portainer-installation.md) supports a different `HTTPS_PORT` and derives the matching trusted origins automatically; this development Compose file uses a fixed 8443 mapping. Keep `home.energy` dedicated to this application: cookies and HSTS are hostname-scoped, not isolated by port.
 
 ## First login
 
