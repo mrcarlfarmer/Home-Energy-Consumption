@@ -10,19 +10,19 @@ Build from **`main`**, which contains the application, polling controls, short c
 
 ### Values to choose
 
-Every address below is an example. Replace it consistently before running commands.
+The Pi's reserved LAN address is **`192.168.1.2`** and is used throughout this guide. Replace the SSH username and review the remaining example hostname, storage path and port before running commands.
 
-| Setting | Example | Purpose |
+| Setting | Value / example | Purpose |
 |---|---|---|
 | Pi SSH user | `YOUR_PI_SSH_USER` | Your existing SSH account; not necessarily `pi` |
-| `PI_LAN_IP` | `192.168.1.50` | Reserve this IPv4 address in DHCP |
+| `PI_LAN_IP` | `192.168.1.2` | Confirmed reserved IPv4 address |
 | `ENERGY_HOSTNAME` | `energy.home.arpa` | Local DNS name pointing to the Pi |
 | `HTTPS_PORT` | `8443` | Published app port; change if already occupied |
 | `ENERGY_ROOT` | `/opt/home-energy` | Local storage on the Pi, preferably SSD-backed |
 | `ENERGY_IMAGE` | `home-energy-monitor:pi-<commit>` | Use the exact tag printed by the build below |
 | Portainer stack name | `home-energy` | Used by the operational examples |
 
-The resulting address is **`https://energy.home.arpa:8443`**. The IP address also works if it is included in the certificate. Portainer's own HTTPS certificate does not automatically cover this separate application.
+With the proposed local DNS name, the address is **`https://energy.home.arpa:8443`**. You can also use **`https://192.168.1.2:8443`** when the certificate includes that IP address. Portainer's own HTTPS certificate does not automatically cover this separate application.
 
 ## 1. Check the Pi
 
@@ -45,7 +45,7 @@ The runtime limit is 140 MiB, but **image building, Docker, Portainer and the OS
 
 Install Git and the Buildx plugin if missing, using your existing Docker installation's package source. For Docker's official Debian/Raspberry Pi OS repository, the plugin package is `docker-buildx-plugin`; do not mix Docker CE and distro Docker packages blindly. A Compose CLI on the Pi is optional for this Portainer workflow.
 
-Set up the DHCP reservation and local DNS entry. Without local DNS, use the example IP URL after replacing it with your real Pi IP; keep the chosen hostname in the certificate for the container health probe. Check the published port is free with `sudo ss -ltnp`.
+Keep the DHCP reservation for `192.168.1.2` and configure the local DNS entry if using the hostname. Without local DNS, use `https://192.168.1.2:8443`; keep the chosen hostname in the certificate for the container health probe. Check the published port is free with `sudo ss -ltnp`.
 
 Do not forward the application port on your router. Bind only to the Pi's LAN address and use Docker-aware firewall rules or network ACLs if needed; do not assume a host UFW rule alone filters Docker-published ports.
 
@@ -80,7 +80,7 @@ After building the desired `main` commit with `--platform linux/arm64 --load` an
 $EnergyImage = "home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT"
 docker image inspect $EnergyImage --format '{{.Os}}/{{.Architecture}}'
 docker save --output .\home-energy-arm64.tar $EnergyImage
-scp .\home-energy-arm64.tar YOUR_PI_SSH_USER@192.168.1.50:home-energy-arm64.tar
+scp .\home-energy-arm64.tar YOUR_PI_SSH_USER@192.168.1.2:home-energy-arm64.tar
 ```
 
 On the Pi, run `docker load --input "$HOME/home-energy-arm64.tar"` and repeat the image inspection. Remove the transfer archive after a successful import if disk space is limited. This exports an application image, not your database or secrets.
@@ -106,7 +106,7 @@ For a personal LAN, an explicit, manually maintained option is mkcert on your ad
 2. From the existing Windows project folder, generate new Pi-specific files in a private, Git-ignored directory:
 
 ```powershell
-$PiHost = "192.168.1.50"
+$PiHost = "192.168.1.2"
 $PiUser = "YOUR_PI_SSH_USER"
 $SshTarget = "${PiUser}@${PiHost}"
 New-Item -ItemType Directory -Force .\secrets\pi | Out-Null
@@ -153,7 +153,7 @@ The image runs as UID/GID `10001:10001`; file ownership matters. Do not make sec
 From the existing project folder in **Windows PowerShell**, after the Pi image/certificates are ready:
 
 ```powershell
-$PiHost = "192.168.1.50"
+$PiHost = "192.168.1.2"
 $PiUser = "YOUR_PI_SSH_USER"
 $SshTarget = "${PiUser}@${PiHost}"
 $BackupName = "pi-transfer-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".sqlite3"
@@ -198,12 +198,12 @@ This retains the Octopus key, selected meter, polling configuration and readings
 1. Select the Pi's **Docker Standalone environment**. Confirm the versioned image appears under its **Images** view.
 2. Open **Stacks > Add stack**, name it **`home-energy`**, and choose **Web editor**.
 3. Paste the complete contents of [deploy/portainer-stack.yml](../deploy/portainer-stack.yml).
-4. Add the following variables in Portainer's **Environment variables** section, or save this block as a local `.env` file and use **Load variables from .env file**. Replace the example values:
+4. Add the following variables in Portainer's **Environment variables** section, or save this block as a local `.env` file and use **Load variables from .env file**. Keep the reserved Pi address below, replace the image tag with your actual build tag, and review the other example values:
 
 ```dotenv
 ENERGY_IMAGE=home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT
 ENERGY_ROOT=/opt/home-energy
-PI_LAN_IP=192.168.1.50
+PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=energy.home.arpa
 HTTPS_PORT=8443
 ```

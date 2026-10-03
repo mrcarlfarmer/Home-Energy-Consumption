@@ -21,11 +21,11 @@ unset PASSWORD
 
 Use a long unique password. It bootstraps the administrator hash only on the first database initialization. Updating this file after initialization does not change an existing password; use the reset procedure in the operations guide.
 
-Obtain a certificate from your trusted local CA, with SANs for the DNS names and/or IP addresses that you will actually visit. For example, using an already installed `mkcert`:
+Obtain a certificate from your trusted local CA, with SANs for the DNS names and/or IP addresses that you will actually visit. The Pi's reserved LAN address is `192.168.1.2`; `energy.home.arpa` is a proposed local DNS name. For example, using an already installed `mkcert`:
 
 ```sh
 mkcert -install
-mkcert -cert-file secrets/energy.pem -key-file secrets/energy-key.pem energy.home.arpa 192.168.1.50
+mkcert -cert-file secrets/energy.pem -key-file secrets/energy-key.pem energy.home.arpa 192.168.1.2
 ```
 
 Configure local DNS so `energy.home.arpa` resolves to the Pi. Install **only the CA certificate**, never its private key, into the trust store of each browser device. Never copy the CA private key into the repository/container. A self-signed certificate without appropriate client trust is not a production substitute.
