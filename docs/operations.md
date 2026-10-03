@@ -23,11 +23,13 @@ Inspect bounded logs with `docker compose logs --tail 100 energy`. Logs contain 
 docker compose exec energy energy-admin password-reset
 ```
 
-Enter the new password interactively. The hash is updated in SQLite; current sessions are revoked within 15 seconds. Restart also clears all in-memory sessions/tokens.
+Enter the new password interactively. The hash and persisted-session revocation are updated together in SQLite; running sessions are revoked within 15 seconds. Ordinary restarts preserve dashboard sessions, but clear the upstream token cache.
+
+Dashboard sessions expire 12 hours after sign-in; activity and restarts do not extend that deadline. Only token digests, CSRF metadata and absolute expiry times are stored, with at most 32 sessions in SQLite and memory. Signing out removes the persisted session. The first upgrade from memory-only sessions requires one new sign-in.
 
 ## Backup
 
-Backups contain the Octopus API key and administrator hash. Store them with private permissions on protected storage.
+Backups contain the Octopus API key, administrator hash and session metadata. Store them with private permissions on protected storage.
 
 Use SQLite's backup API, not a plain copy of an actively WAL-backed database. For a resource-bounded, quiesced backup:
 
@@ -45,7 +47,7 @@ An online `docker compose exec ... backup` is supported by SQLite, but it adds a
 
 Stop collection and the container. Preserve the current database and any associated WAL/SHM files together before a recovery attempt; do not discard an active WAL. Validate the chosen backup with SQLite `PRAGMA integrity_check`.
 
-Restore into a stopped, correctly owned data directory/volume with no stale WAL/SHM from a different database. Mount the target volume in a one-off administrative container if necessary; never run two collectors against it. Restart the service and confirm configuration, latest readings, history and health. Restart invalidates local sessions.
+Restore into a stopped, correctly owned data directory/volume with no stale WAL/SHM from a different database. Mount the target volume in a one-off administrative container if necessary; never run two collectors against it. A backup may contain sessions that were subsequently signed out, so run `energy-admin password-reset` against the restored database before starting the service to revoke those sessions. Then confirm configuration, latest readings, history and health.
 
 Schema migrations are transactional. An image refuses an unknown newer database schema. Before upgrading, take a consistent backup and preserve the current image tag/digest. Roll back a schema-changing upgrade only with the compatible backup/image pair.
 

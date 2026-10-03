@@ -1,6 +1,6 @@
 # Architecture
 
-One process owns the collector, token cache, session store, SSE hub and SQLite writer. FastAPI lifespan starts and supervises background tasks. The production entry point shuts the server down on unexpected worker termination rather than presenting a silently dead collector.
+One process owns the collector, upstream token cache, bounded session cache, SSE hub and SQLite writer. Dashboard sessions are persisted in SQLite and restored into the cache on startup. FastAPI lifespan starts and supervises background tasks. The production entry point shuts the server down on unexpected worker termination rather than presenting a silently dead collector.
 
 ```mermaid
 flowchart LR
@@ -32,7 +32,7 @@ SSE sends complete state snapshots. Each subscriber has one replaceable pending 
 - `backend/app/main.py`: app lifecycle, routes, middleware, supervised production entry point.
 - `settings.py`, `auth.py`, `api_models.py`, `models.py`: validated configuration, local sessions, public schemas and telemetry normalization.
 - `kraken.py`, `poller.py`, `streaming.py`: upstream operations, recovery scheduling and bounded live delivery.
-- `db/store.py`, `db/migrations/001_initial.sql`: migrations, private WAL storage, configuration/readings and rollup maintenance.
+- `db/store.py`, `db/migrations/*.sql`: migrations, private WAL storage, persisted sessions, configuration/readings and rollup maintenance.
 - `analytics/intervals.py`, `analytics/service.py`: one shared calculation definition and range aggregation.
 - `cli.py`, `healthcheck.py`: operational utilities and certificate-validating liveness probe.
 - `frontend/src`: typed vanilla UI, uPlot charts and bundled CSS.

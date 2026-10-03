@@ -9,7 +9,7 @@ let chart: DemandChart | undefined;
 let pending: AbortController | undefined;
 let lastRefresh = 0;
 let lastVersion = -1;
-let selectedHours = 24;
+let selectedMinutes = 1440;
 let generation = 0;
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -112,10 +112,10 @@ function draft(): Record<string, unknown> {
 function localDate(date: Date): string {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
-function setRange(hours: number): void {
-  selectedHours = hours;
+function setRange(minutes: number): void {
+  selectedMinutes = minutes;
   const end = new Date();
-  element<HTMLInputElement>("from").value = localDate(new Date(end.getTime() - hours * 3600000));
+  element<HTMLInputElement>("from").value = localDate(new Date(end.getTime() - minutes * 60000));
   element<HTMLInputElement>("to").value = localDate(end);
 }
 async function refresh(): Promise<void> {
@@ -126,8 +126,10 @@ async function refresh(): Promise<void> {
   pending = controller;
   const current = generation;
   try {
-    const start = new Date(element<HTMLInputElement>("from").value);
-    const end = new Date(element<HTMLInputElement>("to").value);
+    const end = selectedMinutes ? new Date() : new Date(element<HTMLInputElement>("to").value);
+    const start = selectedMinutes
+      ? new Date(end.getTime() - selectedMinutes * 60000)
+      : new Date(element<HTMLInputElement>("from").value);
     const query = new URLSearchParams({ from: start.toISOString(), to: end.toISOString(), device_id: selected });
     text("analysis-status", "Calculating observed demand...");
     const summary = await api<Summary>(`/api/analytics/summary?${query}&timezone=${encodeURIComponent(config.display_timezone)}`, undefined, controller.signal);
@@ -194,7 +196,7 @@ function connect(): void {
       if (snapshot.data_version !== lastVersion) {
         lastVersion = snapshot.data_version;
         if (Date.now() - lastRefresh > 60000 && !document.hidden) {
-          if (selectedHours) setRange(selectedHours);
+          if (selectedMinutes) setRange(selectedMinutes);
           void refresh();
         }
       }
@@ -216,7 +218,7 @@ async function renderDashboard(): Promise<void> {
     <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
     <p id="polling-help" class="note"></p></form></article></section>
     <section><div class="section-heading"><h2>Demand &amp; inverter sizing</h2><select id="history-device" aria-label="Historical meter"></select></div>
-    <div class="presets"><button data-hours="24">24 hours</button><button data-hours="168">7 days</button><button data-hours="720">30 days</button></div>
+    <div class="presets"><button data-minutes="5">5 min</button><button data-minutes="15">15 min</button><button data-minutes="30">30 min</button><button data-minutes="60">1 hour</button><button data-minutes="1440">24 hours</button><button data-minutes="10080">7 days</button><button data-minutes="43200">30 days</button></div>
     <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" required></label>
     <label>To (browser local time)<input id="to" type="datetime-local" required></label><button>Apply custom range</button></form>
     <p id="analysis-status" role="status"></p><div class="metrics"><article><span>Observed coverage</span><strong id="coverage">--</strong></article><article><span>Estimated import</span><strong id="energy">--</strong></article><article><span>Sampled peak</span><strong id="peak">--</strong></article></div>
@@ -234,14 +236,14 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling first)</label></div></div>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p></form></section>
     </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div>`;
-  fillSettings(); setRange(24);
+  fillSettings(); setRange(1440);
   chart = new DemandChart(element("chart"));
   element("logout").onclick = async () => {
     try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
   };
-  element<HTMLFormElement>("range").onsubmit = event => { event.preventDefault(); selectedHours = 0; clearMessage(); void refresh(); };
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-hours]")) {
-    button.onclick = () => { setRange(Number(button.dataset.hours)); clearMessage(); void refresh(); };
+  element<HTMLFormElement>("range").onsubmit = event => { event.preventDefault(); selectedMinutes = 0; clearMessage(); void refresh(); };
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
+    button.onclick = () => { setRange(Number(button.dataset.minutes)); clearMessage(); void refresh(); };
   }
   element("history-device").onchange = () => { clearMessage(); void refresh(); };
   element<HTMLButtonElement>("toggle-polling").onclick = () => {

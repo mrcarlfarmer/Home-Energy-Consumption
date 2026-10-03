@@ -20,7 +20,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.analytics.service import Analytics, Rebuilding, bounds
 from app.api_models import AuthState, Connectivity, History, PublicConfig, Snapshot, Summary
-from app.auth import COOKIE, Auth, Session, hash_password
+from app.auth import COOKIE, SESSION_SECONDS, Auth, Session, hash_password
 from app.db.store import Conflict, Store, one
 from app.kraken import Kraken, KrakenError
 from app.models import ConfigUpdate, Login, Reading, TestConfig, iso, now_us
@@ -140,6 +140,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
                 encoded = await asyncio.to_thread(hash_password, password)
                 await store.set_password(encoded)
             app.state.auth = Auth(store, encoded)
+            await app.state.auth.restore_sessions()
             app.state.fatal = False
             await poller.publish()
 
@@ -227,7 +228,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         response.set_cookie(
             COOKIE,
             token,
-            max_age=12 * 3600,
+            max_age=SESSION_SECONDS,
             httponly=True,
             secure=settings.secure,
             samesite="strict",
@@ -240,7 +241,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
 
     @app.post("/api/auth/logout")
     async def logout(response: Response, session: SessionDep) -> dict[str, bool]:
-        app.state.auth.sessions.pop(session.digest, None)
+        await app.state.auth.logout(session)
         response.delete_cookie(COOKIE, secure=settings.secure, httponly=True, samesite="strict")
         return {"ok": True}
 

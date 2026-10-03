@@ -75,6 +75,8 @@ Only port 8443 is published. Restrict it with the host firewall to the trusted L
 
 Connectivity tests do not save credentials or enable collection. Test requests share the telemetry quota governor; a recent test/poll can require waiting before the next test. An accessible meter with no recent data is reported separately from a successful telemetry retrieval.
 
+The demand and inverter-sizing chart offers **5 min**, **15 min**, **30 min**, **1 hour**, **24 hours**, **7 days** and **30 days**, plus a custom range. Presets end at the current time and continue moving forward with live updates.
+
 ## Resource policy and images
 
 The Compose limit is **140 MiB = 146,800,640 bytes**, below 150 decimal MB. Swap is not available to hide an oversized process where Docker enforces the configured limits. The root filesystem is read-only, `/tmp` is an 8 MiB tmpfs, all capabilities are dropped and new privileges are disabled.

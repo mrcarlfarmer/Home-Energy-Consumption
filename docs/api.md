@@ -8,6 +8,8 @@ The application exposes its current generated schema to authenticated users at `
 
 `GET /api/auth/session` returns the current CSRF token. Send it as `X-CSRF-Token` with all subsequent mutations. `POST /api/auth/logout` revokes the session; associated SSE streams close at their next session check (within 15 seconds).
 
+Dashboard sessions survive routine application/container restarts and expire 12 hours after sign-in, without sliding renewal. Logout and password reset revoke persisted sessions. Upgrading from the original memory-only session store requires one new sign-in.
+
 ## Configuration
 
 | Endpoint | Contract |

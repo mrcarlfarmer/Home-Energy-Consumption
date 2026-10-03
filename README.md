@@ -52,7 +52,7 @@ Set-Location ..
 .\.venv\Scripts\python -m ruff check backend tests
 ```
 
-On Linux, use `.venv/bin/python` instead. Browser tests start a loopback-only, synthetic HTTP fixture; production always requires HTTPS. The installed `energy-monitor` entry point validates production environment settings and starts exactly one uvicorn worker. Do not use uvicorn reload or additional workers: they would create duplicate collectors and independent session stores.
+On Linux, use `.venv/bin/python` instead. Browser tests start a loopback-only, synthetic HTTP fixture; production always requires HTTPS. The installed `energy-monitor` entry point validates production environment settings and starts exactly one uvicorn worker. Do not use uvicorn reload or additional workers: they would create duplicate collectors and independent session caches.
 
 Regenerate Python locks after deliberate dependency changes:
 

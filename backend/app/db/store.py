@@ -12,6 +12,7 @@ from app.analytics.intervals import Metrics, integrate
 from app.models import ALGORITHM_VERSION, BUCKET_US, GAP_US, ConfigUpdate, Reading, now_us
 
 log = logging.getLogger(__name__)
+MAX_SESSIONS = 32
 
 
 class Conflict(Exception):
@@ -54,12 +55,11 @@ class Store:
                 if index == 0:
                     self.writer = conn
                     version = (await one(conn, "PRAGMA user_version"))[0]
-                    if version > 1:
+                    migrations = ("001_initial.sql", "002_sessions.sql")
+                    if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
-                    if version == 0:
-                        migration = (
-                            Path(__file__).parent / "migrations" / "001_initial.sql"
-                        ).read_text()
+                    for filename in migrations[version:]:
+                        migration = (Path(__file__).parent / "migrations" / filename).read_text()
                         await conn.executescript("BEGIN IMMEDIATE;\n" + migration + "\nCOMMIT;")
                 else:
                     await conn.execute("PRAGMA query_only=ON")
@@ -180,6 +180,42 @@ class Store:
                 "password_hash=excluded.password_hash,updated_at_us=excluded.updated_at_us",
                 (value, now_us()),
             )
+            await conn.execute("DELETE FROM admin_sessions")
+
+    @staticmethod
+    async def prune_sessions(conn: aiosqlite.Connection) -> None:
+        await conn.execute("DELETE FROM admin_sessions WHERE expires_at_us<=?", (now_us(),))
+        await conn.execute(
+            "DELETE FROM admin_sessions WHERE id NOT IN "
+            "(SELECT id FROM admin_sessions ORDER BY id DESC LIMIT ?)",
+            (MAX_SESSIONS,),
+        )
+
+    async def load_sessions(self) -> list[tuple[str, str, int]]:
+        async with self.write() as conn:
+            await self.prune_sessions(conn)
+            async with conn.execute(
+                "SELECT token_digest,csrf_token,expires_at_us FROM admin_sessions ORDER BY id"
+            ) as cursor:
+                return [(str(row[0]), str(row[1]), int(row[2])) for row in await cursor.fetchall()]
+
+    async def save_session(
+        self, digest: str, csrf: str, expires_at_us: int, password_hash: str
+    ) -> bool:
+        async with self.write() as conn:
+            current = await one(conn, "SELECT password_hash FROM admin_auth WHERE singleton=1")
+            if current[0] != password_hash:
+                return False
+            await conn.execute(
+                "INSERT INTO admin_sessions(token_digest,csrf_token,expires_at_us) VALUES(?,?,?)",
+                (digest, csrf, expires_at_us),
+            )
+            await self.prune_sessions(conn)
+            return True
+
+    async def delete_session(self, digest: str) -> None:
+        async with self.write() as conn:
+            await conn.execute("DELETE FROM admin_sessions WHERE token_digest=?", (digest,))
 
     async def latest(self, device: str | None) -> dict[str, Any] | None:
         if device is None:

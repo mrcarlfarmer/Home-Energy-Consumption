@@ -114,3 +114,28 @@ test("polling errors leave the saved state unchanged and controls usable", async
   await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Enable polling", { exact: true })).not.toBeChecked();
 });
+
+test("short chart presets request exact windows ending now", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Dashboard password").fill("fixture-only-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  for (const [label, minutes] of [["1 hour", 60], ["30 min", 30], ["15 min", 15], ["5 min", 5]] as const) {
+    const response = page.waitForResponse(value => {
+      const url = new URL(value.url());
+      if (url.pathname !== "/api/analytics/history") return false;
+      return new Date(url.searchParams.get("to")!).getTime() - new Date(url.searchParams.get("from")!).getTime() === minutes * 60000;
+    });
+    const before = Date.now();
+    await page.getByRole("button", { name: label, exact: true }).click();
+    const history = await response;
+    expect(history.ok()).toBe(true);
+    const url = new URL(history.url());
+    const end = new Date(url.searchParams.get("to")!).getTime();
+    expect(end).toBeGreaterThanOrEqual(before - 1000);
+    expect(end).toBeLessThanOrEqual(Date.now());
+    expect((await history.json()).interval_seconds).toBe(60);
+    await expect(page.locator("#analysis-status")).toContainText("Chart buckets: 1 min");
+    await expect(page.locator("#chart canvas").first()).toBeVisible();
+  }
+});

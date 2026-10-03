@@ -5,9 +5,11 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
-from app.db.store import Store
+from app.db.store import MAX_SESSIONS, Store
+from app.models import now_us
 
 COOKIE = "energy_session"
+SESSION_SECONDS = 12 * 3600
 
 
 def hash_password(password: str) -> str:
@@ -41,6 +43,20 @@ class Auth:
         self.global_attempts: deque[float] = deque()
         self.verifying = asyncio.Lock()
 
+    async def restore_sessions(self) -> None:
+        self.sessions = OrderedDict(
+            (digest, Session(digest, csrf, expires / 1_000_000))
+            for digest, csrf, expires in await self.store.load_sessions()
+        )
+
+    async def refresh_password(self) -> None:
+        encoded = await self.store.password_hash()
+        if encoded is None:
+            raise RuntimeError("Administrator hash disappeared")
+        if self.password_hash != encoded:
+            self.password_hash = encoded
+            self.sessions.clear()
+
     def allowed(self, address: str) -> bool:
         now = time.monotonic()
         attempts = self.attempts.setdefault(address, deque())
@@ -58,34 +74,42 @@ class Auth:
 
     async def login(self, password: str) -> tuple[str, Session] | None:
         async with self.verifying:
+            await self.refresh_password()
             encoded = self.password_hash
             valid = await asyncio.to_thread(verify_password, password, encoded)
-        if not valid or encoded != self.password_hash:
-            return None
-        token = secrets.token_urlsafe(32)
-        digest = hashlib.sha256(token.encode()).hexdigest()
-        session = Session(digest, secrets.token_urlsafe(32), time.monotonic() + 12 * 3600)
-        self.sessions[digest] = session
-        while len(self.sessions) > 32:
-            self.sessions.popitem(last=False)
-        return token, session
+            if not valid or encoded != self.password_hash:
+                return None
+            token = secrets.token_urlsafe(32)
+            digest = hashlib.sha256(token.encode()).hexdigest()
+            expires = now_us() + SESSION_SECONDS * 1_000_000
+            session = Session(digest, secrets.token_urlsafe(32), expires / 1_000_000)
+            if not await self.store.save_session(digest, session.csrf, expires, encoded):
+                return None
+            if encoded != self.password_hash:
+                return None
+            for key, existing in list(self.sessions.items()):
+                if existing.expires <= time.time():
+                    self.sessions.pop(key, None)
+            self.sessions[digest] = session
+            while len(self.sessions) > MAX_SESSIONS:
+                self.sessions.popitem(last=False)
+            return token, session
+
+    async def logout(self, session: Session) -> None:
+        await self.store.delete_session(session.digest)
+        self.sessions.pop(session.digest, None)
 
     def session(self, token: str | None) -> Session | None:
         if token is None or len(token) > 128:
             return None
         digest = hashlib.sha256(token.encode()).hexdigest()
         session = self.sessions.get(digest)
-        if session and session.expires <= time.monotonic():
+        if session and session.expires <= time.time():
             self.sessions.pop(digest, None)
             return None
         return session
 
     async def watch_password(self) -> None:
         while True:
-            encoded = await self.store.password_hash()
-            if encoded is None:
-                raise RuntimeError("Administrator hash disappeared")
-            if self.password_hash != encoded:
-                self.password_hash = encoded
-                self.sessions.clear()
+            await self.refresh_password()
             await asyncio.sleep(15)
