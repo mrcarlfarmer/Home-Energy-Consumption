@@ -6,7 +6,7 @@ This plan uses **Portainer with a Docker Standalone environment on a 64-bit Rasp
 
 The recommended route is to build the ARM64 image on the Pi, then paste [the Portainer stack](../deploy/portainer-stack.yml) into Portainer's Web editor. No image registry or paid relative-path feature is required. The stack deliberately has no `build:` context and uses `pull_policy: never`: the selected image must already exist on the **Pi's Docker endpoint**, not just on your Windows PC or the Portainer server.
 
-Application source is pinned to verified commit **`5d4c278f4650b3a75ca60d29f8fb73ed14d5c73a`**, which includes the polling controls, short chart ranges and persistent login sessions. Do not assume `main` contains this version while the implementation PR is still a draft. This is the initial native-Pi acceptance deployment, not a claim that Pi performance has already been measured.
+Build from **`main`**, which contains the application, polling controls, short chart ranges, persistent login sessions and this installation configuration. Tag the image with the actual source commit so the installed version is identifiable. This is the initial native-Pi acceptance deployment, not a claim that Pi performance has already been measured.
 
 ### Values to choose
 
@@ -19,7 +19,7 @@ Every address below is an example. Replace it consistently before running comman
 | `ENERGY_HOSTNAME` | `energy.home.arpa` | Local DNS name pointing to the Pi |
 | `HTTPS_PORT` | `8443` | Published app port; change if already occupied |
 | `ENERGY_ROOT` | `/opt/home-energy` | Local storage on the Pi, preferably SSD-backed |
-| `ENERGY_IMAGE` | `home-energy-monitor:pi-5d4c278` | Versioned local ARM64 image |
+| `ENERGY_IMAGE` | `home-energy-monitor:pi-<commit>` | Use the exact tag printed by the build below |
 | Portainer stack name | `home-energy` | Used by the operational examples |
 
 The resulting address is **`https://energy.home.arpa:8443`**. The IP address also works if it is included in the certificate. Portainer's own HTTPS certificate does not automatically cover this separate application.
@@ -54,29 +54,32 @@ Do not forward the application port on your router. Bind only to the Pi's LAN ad
 Run as a user allowed to use Docker, or prefix Docker commands with `sudo`. Docker access is effectively root-equivalent.
 
 ```sh
-git clone https://github.com/mrcarlfarmer/Home-Energy-Consumption.git "$HOME/home-energy-source"
+git clone --branch main --single-branch https://github.com/mrcarlfarmer/Home-Energy-Consumption.git "$HOME/home-energy-source"
 cd "$HOME/home-energy-source"
-git checkout --detach 5d4c278f4650b3a75ca60d29f8fb73ed14d5c73a
+APP_REV=$(git rev-parse --short=12 HEAD)
+ENERGY_IMAGE="home-energy-monitor:pi-${APP_REV}"
 docker buildx build --platform linux/arm64 --load \
-  --tag home-energy-monitor:pi-5d4c278 .
-docker image inspect home-energy-monitor:pi-5d4c278 \
+  --tag "$ENERGY_IMAGE" .
+docker image inspect "$ENERGY_IMAGE" \
   --format '{{.Os}}/{{.Architecture}} {{.Id}}'
+printf 'ENERGY_IMAGE=%s\n' "$ENERGY_IMAGE"
 ```
 
-The inspection must report `linux/arm64`. Record the image ID. The build requires outbound access to GitHub, Docker Hub, PyPI and npm; the running dashboard bundles its frontend and only needs the Kraken API, DNS and correct host time.
+The inspection must report `linux/arm64`. Record the image ID and printed `ENERGY_IMAGE` value; use that exact value in Portainer. In any new Pi SSH session, set `ENERGY_IMAGE` to this tag again before running commands that reference it. The build requires outbound access to GitHub, Docker Hub, PyPI and npm; the running dashboard bundles its frontend and only needs the Kraken API, DNS and correct host time.
 
-Use the stack file accompanying **this guide**, not the development `docker-compose.yml` from the pinned application checkout. The installation guide/stack were added after that verified runtime commit.
+Use `deploy/portainer-stack.yml` from this checkout, not the development `docker-compose.yml`. If the source directory already exists, inspect any local changes before updating it; use `git pull --ff-only origin main` from a clean `main` checkout rather than overwriting a previous installation.
 
 ### Alternative: build elsewhere and transfer an ARM64 image
 
 Use a known ARM64-capable builder, native or emulated. The Windows `home-energy-monitor:local` development image is AMD64 and must not be substituted. An ARM64 image built before the session/chart updates is also not the intended version.
 
-After building the pinned source with `--platform linux/arm64 --load` and the tag above:
+After building the desired `main` commit with `--platform linux/arm64 --load` and a commit-specific tag, set `$EnergyImage` to that exact tag:
 
 ```powershell
 # On the build PC; replace the destination SSH user and address.
-docker image inspect home-energy-monitor:pi-5d4c278 --format '{{.Os}}/{{.Architecture}}'
-docker save --output .\home-energy-arm64.tar home-energy-monitor:pi-5d4c278
+$EnergyImage = "home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT"
+docker image inspect $EnergyImage --format '{{.Os}}/{{.Architecture}}'
+docker save --output .\home-energy-arm64.tar $EnergyImage
 scp .\home-energy-arm64.tar YOUR_PI_SSH_USER@192.168.1.50:home-energy-arm64.tar
 ```
 
@@ -185,7 +188,7 @@ Revoke sessions copied in the backup and set the Pi dashboard password to the on
 docker run --rm -it --network none --user 10001:10001 \
   --memory 140m --memory-swap 140m \
   --mount type=bind,src=/opt/home-energy/data,dst=/data \
-  --entrypoint energy-admin home-energy-monitor:pi-5d4c278 password-reset
+  --entrypoint energy-admin "${ENERGY_IMAGE:?Set ENERGY_IMAGE to your built image tag}" password-reset
 ```
 
 This retains the Octopus key, selected meter, polling configuration and readings. Minimize the cutover gap: recovery is limited to recent data, not arbitrary historical backfill. Clean up the specifically named staging copies of the private key/database after the Pi is accepted and a protected backup is retained.
@@ -198,7 +201,7 @@ This retains the Octopus key, selected meter, polling configuration and readings
 4. Add the following variables in Portainer's **Environment variables** section, or save this block as a local `.env` file and use **Load variables from .env file**. Replace the example values:
 
 ```dotenv
-ENERGY_IMAGE=home-energy-monitor:pi-5d4c278
+ENERGY_IMAGE=home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.50
 ENERGY_HOSTNAME=energy.home.arpa
@@ -247,7 +250,7 @@ Keep timestamped backups on separate protected storage, not only alongside the l
 docker run --rm --network none --user 10001:10001 \
   --memory 140m --memory-swap 140m \
   --mount type=bind,src=/opt/home-energy/data,dst=/data \
-  --entrypoint energy-admin home-energy-monitor:pi-5d4c278 \
+  --entrypoint energy-admin "${ENERGY_IMAGE:?Set ENERGY_IMAGE to your deployed image tag}" \
   backup --output "/data/backups/energy-$(date +%Y%m%d-%H%M%S).sqlite3"
 ```
 
