@@ -71,7 +71,7 @@ Only port 8443 is published. Restrict it with the host firewall to the trusted L
 1. Open the configured HTTPS address and use the bootstrap password.
 2. Enter the Octopus API key and account number in Settings.
 3. Test connectivity to list electricity meters. Select the intended EUI-64 ID; test again when the rate governor permits.
-4. Save settings and enable polling.
+4. Save settings, then click **Start polling** in the Polling panel beside live demand. The same panel lets you stop collection and save a polling interval (30-3,600 seconds, default 45). These controls update the saved settings immediately; saving an interval alone does not enable polling. The equivalent controls remain available in Settings and take effect when **Save settings** is clicked.
 
 Connectivity tests do not save credentials or enable collection. Test requests share the telemetry quota governor; a recent test/poll can require waiting before the next test. An accessible meter with no recent data is reported separately from a successful telemetry retrieval.
 

@@ -57,12 +57,44 @@ function deviceOptions(target: HTMLSelectElement, devices: Device[], selected: s
   for (const device of devices) target.add(new Option(device.label, device.device_id));
   target.value = selected ?? "";
 }
+function fillPolling(): void {
+  const ready = config.has_api_key && !!config.account_number && !!config.active_device_id;
+  const toggle = element<HTMLButtonElement>("toggle-polling");
+  toggle.textContent = config.polling_enabled ? "Stop polling" : "Start polling";
+  toggle.disabled = !config.polling_enabled && !ready;
+  text("polling-status", config.polling_enabled
+    ? `Polling enabled. Scheduled interval: ${config.poll_interval_seconds} seconds.`
+    : "Polling disabled. No new readings are being collected.");
+  text("polling-help", ready
+    ? "Interval: 30-3,600 seconds; default: 45. Saving an interval does not start polling."
+    : "Save your API key, account number and selected meter in Settings before starting polling.");
+  element<HTMLInputElement>("live-interval").value = String(config.poll_interval_seconds);
+  element<HTMLInputElement>("enabled").checked = config.polling_enabled;
+  element<HTMLInputElement>("interval").value = String(config.poll_interval_seconds);
+}
+async function savePolling(update: { polling_enabled?: boolean; poll_interval_seconds?: number }): Promise<void> {
+  clearMessage();
+  const current = generation;
+  const buttons = document.querySelectorAll<HTMLButtonElement>("#polling button, #settings-save");
+  for (const button of buttons) button.disabled = true;
+  try {
+    const saved = await api<Config>("/api/config", { expected_revision: config.revision, ...update });
+    if (current !== generation) return;
+    config = saved;
+  } catch (error) {
+    if (current === generation) showError(error);
+  } finally {
+    if (current === generation) {
+      for (const button of buttons) button.disabled = false;
+      fillPolling();
+    }
+  }
+}
 function fillSettings(): void {
   element<HTMLInputElement>("account").value = config.account_number ?? "";
   element<HTMLInputElement>("key").value = "";
   element<HTMLInputElement>("clear-key").checked = false;
-  element<HTMLInputElement>("enabled").checked = config.polling_enabled;
-  element<HTMLInputElement>("interval").value = String(config.poll_interval_seconds);
+  fillPolling();
   element<HTMLInputElement>("timezone").value = config.display_timezone;
   deviceOptions(element<HTMLSelectElement>("device"), config.devices, config.active_device_id);
   deviceOptions(element<HTMLSelectElement>("history-device"), config.devices, config.active_device_id);
@@ -177,7 +209,12 @@ async function renderDashboard(): Promise<void> {
     <button id="logout" class="secondary">Sign out</button></header><main>
     <p id="message" role="alert"></p>
     <section class="live-grid"><article class="live-card"><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
-    <article><h2>Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small></article></section>
+    <article><h2>Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
+    <form id="polling" class="polling-controls" aria-label="Live polling controls">
+    <div class="section-heading"><h3>Polling</h3><button id="toggle-polling" type="button">Start polling</button></div>
+    <p id="polling-status" role="status"></p>
+    <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
+    <p id="polling-help" class="note"></p></form></article></section>
     <section><div class="section-heading"><h2>Demand &amp; inverter sizing</h2><select id="history-device" aria-label="Historical meter"></select></div>
     <div class="presets"><button data-hours="24">24 hours</button><button data-hours="168">7 days</button><button data-hours="720">30 days</button></div>
     <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" required></label>
@@ -195,7 +232,7 @@ async function renderDashboard(): Promise<void> {
     <label>Polling interval (seconds)<input id="interval" type="number" min="30" max="3600" required></label>
     <label>Display / calendar timezone<input id="timezone" required></label>
     <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling first)</label></div></div>
-    <div class="actions"><button type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p id="test-result" role="status"></p></form></section>
+    <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p></form></section>
     </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div>`;
   fillSettings(); setRange(24);
   chart = new DemandChart(element("chart"));
@@ -207,6 +244,13 @@ async function renderDashboard(): Promise<void> {
     button.onclick = () => { setRange(Number(button.dataset.hours)); clearMessage(); void refresh(); };
   }
   element("history-device").onchange = () => { clearMessage(); void refresh(); };
+  element<HTMLButtonElement>("toggle-polling").onclick = () => {
+    void savePolling({ polling_enabled: !config.polling_enabled });
+  };
+  element<HTMLFormElement>("polling").onsubmit = event => {
+    event.preventDefault();
+    void savePolling({ poll_interval_seconds: Number(element<HTMLInputElement>("live-interval").value) });
+  };
   element<HTMLFormElement>("settings").onsubmit = async event => {
     event.preventDefault(); clearMessage();
     const data: Record<string, unknown> = { ...draft(), expected_revision: config.revision,

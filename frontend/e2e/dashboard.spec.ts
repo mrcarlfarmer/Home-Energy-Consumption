@@ -16,6 +16,7 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await page.getByLabel("Polling interval (seconds)").fill("60");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.locator("#test-result")).toHaveText("Settings saved.");
+  await expect(page.getByLabel("Check every (seconds)")).toHaveValue("60");
   await page.getByRole("button", { name: "7 days", exact: true }).click();
   await expect(page.locator("#analysis-status")).toContainText("Chart buckets: 15 min");
   await page.getByRole("button", { name: "Sign out" }).click();
@@ -37,4 +38,79 @@ test("protected endpoints, origin checks and missing data presentation", async (
   await page.getByRole("button", { name: "Apply custom range" }).click();
   await expect(page.locator("#coverage")).toHaveText("0%");
   await expect(page.locator("#energy")).toContainText("Unavailable");
+});
+
+test("live polling controls persist and synchronize without saving credential drafts", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Dashboard password").fill("fixture-only-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
+  await expect(page.locator("#polling-status")).toContainText("Polling disabled");
+  await page.getByLabel("Replace Octopus API key").fill("unsaved-fixture-key");
+  await page.getByLabel("Octopus account number").fill("A-UNSAVED");
+  await page.getByLabel("Check every (seconds)").fill("75");
+  await page.getByRole("button", { name: "Save interval", exact: true }).click();
+  await expect(page.getByLabel("Polling interval (seconds)", { exact: true })).toHaveValue("75");
+  await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
+  let saved = await (await page.request.get("/api/config")).json();
+  expect(saved.poll_interval_seconds).toBe(75);
+  expect(saved.polling_enabled).toBe(false);
+  expect(saved.account_number).toBe("A-FIXTURE");
+
+  await page.getByRole("button", { name: "Start polling", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop polling", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Enable polling", { exact: true })).toBeChecked();
+  await expect(page.locator("#polling-status")).toContainText("Scheduled interval: 75 seconds");
+  await expect(page.getByLabel("Replace Octopus API key")).toHaveValue("unsaved-fixture-key");
+  await expect(page.getByLabel("Octopus account number")).toHaveValue("A-UNSAVED");
+  saved = await (await page.request.get("/api/config")).json();
+  expect(saved.polling_enabled).toBe(true);
+  expect(saved.account_number).toBe("A-FIXTURE");
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Stop polling", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Check every (seconds)")).toHaveValue("75");
+  for (const interval of ["30", "3600", "75"]) {
+    await page.getByLabel("Check every (seconds)").fill(interval);
+    await page.getByRole("button", { name: "Save interval", exact: true }).click();
+    await expect(page.getByLabel("Polling interval (seconds)", { exact: true })).toHaveValue(interval);
+    saved = await (await page.request.get("/api/config")).json();
+    expect(saved.poll_interval_seconds).toBe(Number(interval));
+  }
+  const writes: string[] = [];
+  page.on("request", request => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/config") writes.push(request.url());
+  });
+  for (const invalid of ["29", "3601", "45.5", ""]) {
+    await page.getByLabel("Check every (seconds)").fill(invalid);
+    await page.getByRole("button", { name: "Save interval", exact: true }).click();
+    await expect(page.locator("#live-interval:invalid")).toHaveCount(1);
+  }
+  expect(writes).toHaveLength(0);
+  await page.getByRole("button", { name: "Stop polling", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Enable polling", { exact: true })).not.toBeChecked();
+  saved = await (await page.request.get("/api/config")).json();
+  expect(saved.polling_enabled).toBe(false);
+  expect(saved.poll_interval_seconds).toBe(75);
+});
+
+test("polling errors leave the saved state unchanged and controls usable", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Dashboard password").fill("fixture-only-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
+  await page.route("**/api/config", async route => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 503, json: { detail: "Synthetic configuration failure" } });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.getByRole("button", { name: "Start polling", exact: true }).click();
+  await expect(page.locator("#message")).toHaveText("Synthetic configuration failure");
+  await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save interval", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Enable polling", { exact: true })).not.toBeChecked();
 });

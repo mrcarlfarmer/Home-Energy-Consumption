@@ -15,6 +15,9 @@ section { margin-bottom: 24px; padding: 26px; border: 1px solid #dfe7df; border-
 .reading { font-size: 1.4rem; }
 .reading strong { font-size: 4rem; font-weight: 550; letter-spacing: -.06em; }
 .live-card p { margin: 8px 0; }
+.polling-controls { margin-top: 24px; padding-top: 18px; border-top: 1px solid #dfe7df; }
+.polling-controls h3 { margin: 0; font-size: 1rem; }
+.polling-controls .section-heading { align-items: center; }
 .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 20px 0 28px; }
 .metrics article { background: #f4f7f3; padding: 18px; border-radius: 10px; }
 .metrics span { display: block; color: #596d67; font-size: .85rem; }
