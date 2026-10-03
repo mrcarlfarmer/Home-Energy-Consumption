@@ -1,10 +1,10 @@
-import { api, ApiError, Config, Device, History, session, Snapshot, Summary } from "./api";
+import { api, ApiError, authenticationRequired, Config, Device, History, session, Snapshot, Summary } from "./api";
 import { DemandChart } from "./charts";
 import "./styles.css";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const transportNotice = location.protocol === "http:"
-  ? "HTTP connection: your password, API key and session are not encrypted in transit. Use a trusted LAN only."
+  ? "HTTP connection: data and API-key entry are not encrypted in transit. Use a trusted LAN only."
   : "";
 let config: Config;
 let stream: EventSource | undefined;
@@ -211,8 +211,9 @@ async function renderDashboard(): Promise<void> {
   config = await api<Config>("/api/config");
   lastVersion = -1;
   root.innerHTML = `<div id="dashboard"><header><div><p class="eyebrow">YOUR HOME, IN FOCUS</p><h1>Home Energy</h1></div>
-    <button id="logout" class="secondary">Sign out</button></header><main>
+    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><main>
     <p id="message" role="alert"></p>
+    ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
     ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="live-grid"><article class="live-card"><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
     <article><h2>Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
@@ -242,9 +243,11 @@ async function renderDashboard(): Promise<void> {
     </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div>`;
   fillSettings(); setRange(1440);
   chart = new DemandChart(element("chart"));
-  element("logout").onclick = async () => {
-    try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
-  };
+  if (authenticationRequired) {
+    element("logout").onclick = async () => {
+      try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
+    };
+  }
   element<HTMLFormElement>("range").onsubmit = event => { event.preventDefault(); selectedMinutes = 0; clearMessage(); void refresh(); };
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
     button.onclick = () => { setRange(Number(button.dataset.minutes)); clearMessage(); void refresh(); };
@@ -287,6 +290,19 @@ async function renderDashboard(): Promise<void> {
   await refresh();
 }
 
-session().then(renderDashboard).catch(error => {
-  renderLogin(error instanceof ApiError && error.status === 401 ? "" : "Could not reach the server.");
-});
+async function start(): Promise<void> {
+  try {
+    await session();
+    await renderDashboard();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      renderLogin();
+      return;
+    }
+    cleanup();
+    root.innerHTML = '<main class="login"><h1>Home Energy</h1><p id="message" role="alert"></p><button id="retry">Retry</button></main>';
+    showError(error);
+    element("retry").onclick = () => { void start(); };
+  }
+}
+void start();

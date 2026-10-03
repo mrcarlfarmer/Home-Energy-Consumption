@@ -1,6 +1,6 @@
 # Raspberry Pi installation with Portainer
 
-**Want no certificates?** Use the [certificate-free HTTP installation guide](portainer-http-installation.md) and [HTTP stack](../deploy/portainer-http-stack.yml). It retains login protection but sends browser credentials unencrypted, so it is only appropriate for a trusted LAN. The instructions below remain the HTTPS alternative.
+**Want no certificates or login?** Use the [password-free HTTP installation guide](portainer-http-installation.md) and [HTTP stack](../deploy/portainer-http-stack.yml). Anyone who can reach it can view data and change settings, and browser traffic is unencrypted. It is only appropriate for a trusted LAN. The instructions below remain the password-protected HTTPS alternative.
 
 ## Deployment choices
 

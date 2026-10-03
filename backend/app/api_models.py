@@ -23,6 +23,7 @@ class PublicConfig(BaseModel):
 
 class AuthState(BaseModel):
     authenticated: bool
+    authentication_required: bool
     csrf_token: str
 
 

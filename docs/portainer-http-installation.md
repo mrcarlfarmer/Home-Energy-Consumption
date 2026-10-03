@@ -1,10 +1,10 @@
-# Certificate-free Portainer installation (trusted LAN only)
+# No-login, certificate-free Portainer installation (trusted LAN only)
 
-Use [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml) for **HTTP without any certificate files**. Keep the dashboard password. The application still authenticates users, checks CSRF and trusted Origins/Hosts, and retains sessions across restarts.
+Use [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml) for **HTTP without certificates or a dashboard login**. The dashboard opens directly, including Settings. No password file is needed. CSRF and trusted Origin/Host checks remain enabled, and saved API keys are still redacted from responses.
 
-**Tradeoff:** HTTP does not encrypt traffic between your browser and the Pi. Passwords, session cookies, telemetry and the Octopus API key when entered can be observed or modified by someone able to intercept that connection. A password does not replace transport encryption. Use this only on a trusted LAN with no router port forwarding or public/untrusted-network exposure. The Pi's connection to Octopus still uses verified HTTPS.
+**Tradeoff:** anyone who can reach this service can view electricity data, change settings and control collection. HTTP also leaves telemetry and API-key entry unencrypted, so intercepted traffic can be observed or modified. CSRF/Host/Origin checks do not authenticate people on your network. Use this only on a trusted LAN with no router port forwarding or public/untrusted-network exposure. The Pi's connection to Octopus still uses verified HTTPS and its API credentials.
 
-HTTPS remains the application's default, and the existing HTTPS stack is unchanged. This separate stack explicitly sets `APP_TRANSPORT=http`; omitting that setting does not silently disable TLS. "Trusted LAN" describes the deployment boundary, not an automatic guarantee made by the application.
+HTTPS and password authentication remain the application's defaults, and the existing HTTPS stack is unchanged. This separate stack explicitly sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. These are deployment settings, not switches exposed to unauthenticated dashboard users. "Trusted LAN" describes the deployment boundary, not an automatic guarantee made by the application.
 
 ## 1. Build the updated image on the Pi
 
@@ -31,38 +31,26 @@ else
 fi
 ```
 
-If Git reports local changes or a non-fast-forward update, resolve that before building; do not overwrite your work. Expect `linux/arm64` from the inspection. Copy the printed image tag for Portainer. An older image that only supported HTTPS will not work with this stack: pull and rebuild first.
+If Git reports local changes or a non-fast-forward update, resolve that before building; do not overwrite your work. Expect `linux/arm64` from the inspection. Copy the printed image tag for Portainer. Pull and rebuild first: images from before password-free support still require login, even if you paste the new stack configuration.
 
 The image must exist on the Pi's Docker endpoint. If building elsewhere, use an ARM64-capable builder and the [image transfer procedure](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image); do not copy the Windows AMD64 development image. Build-time RAM and disk needs exceed the 140 MiB runtime limit.
 
-## 2. Prepare storage and the password
+## 2. Prepare storage
 
 Run on the Pi over SSH:
 
 ```sh
 sudo install -d -m 755 /opt/home-energy
-sudo install -d -m 700 -o 10001 -g 10001 \
-  /opt/home-energy/data /opt/home-energy/secrets
+sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data
 ```
 
-For a new installation, create a long unique password of at least 12 characters:
-
-```sh
-IFS= read -r -s -p "Dashboard password (12+ characters): " PASSWORD
-printf '\n'
-printf '%s\n' "$PASSWORD" | sudo tee /opt/home-energy/secrets/admin-password >/dev/null
-unset PASSWORD
-sudo chown 10001:10001 /opt/home-energy/secrets/admin-password
-sudo chmod 400 /opt/home-energy/secrets/admin-password
-```
-
-If the password file/data already exist, retain them rather than overwriting them. The bootstrap file does not reset an existing database password. The container uses UID/GID `10001:10001`; do not solve permission issues by making secrets world-readable.
+Retain existing data rather than overwriting it. The container uses UID/GID `10001:10001`; do not solve permission issues by making the private database world-readable.
 
 Use local storage, preferably an SSD, not NFS/SMB for SQLite WAL. Ensure any storage mount is available before Docker starts. These paths must exist on the Pi's Docker endpoint, not just on the Portainer server.
 
-**No mkcert, CA installation, certificate or TLS private key is needed.** If HTTPS certificate files already exist, you may leave them in place; this stack does not mount or read them.
+**No password file, mkcert, CA installation, certificate or TLS private key is needed.** If these files already exist, you may retain them privately for rollback; this stack does not mount or read them.
 
-For a fresh installation, leave the data directory empty. To keep your current PC settings/history, first run `install -d -m 700 "$HOME/energy-install"` on the Pi to create the private transfer staging directory. Then follow [the data migration procedure](portainer-installation.md#5-choose-a-fresh-installation-or-migrate-the-current-data), skipping all certificate steps. Transfer only into a stopped, empty destination and reset the imported dashboard password to revoke copied sessions. Do not run both collectors against the same meter simultaneously.
+For a fresh installation, leave the data directory empty. To keep your current PC settings/history, first run `install -d -m 700 "$HOME/energy-install"` on the Pi to create the private transfer staging directory. Then follow the backup, transfer and database-install steps in [the data migration procedure](portainer-installation.md#5-choose-a-fresh-installation-or-migrate-the-current-data), skipping certificate and password-reset steps. Transfer only into a stopped, empty destination. Password-free startup automatically revokes copied authenticated sessions without changing the saved password hash, API key or history. Do not run both collectors against the same meter simultaneously.
 
 ## 3. Choose the hostname and an available host port
 
@@ -106,22 +94,24 @@ HTTP_PORT=8080
 5. Leave image re-pulling disabled: `pull_policy: never` requires the locally built image.
 6. Deploy/update the stack and confirm the container becomes healthy.
 
-There are only two host mounts: the private data directory and the read-only password file. There are no certificate mounts or TLS variables. Do not put your dashboard password or Octopus API key in the stack or its environment-variable form.
+The only host mount is the private data directory. There are no password/certificate mounts or TLS variables. Do not put the Octopus API key in the stack or its environment-variable form.
 
 The stack retains the 140 MiB memory limit, no extra swap allowance, non-root user, read-only root filesystem, bounded logs and dropped capabilities. Keep capacity for the Pi OS, Docker, Portainer and other containers. Bind to the reserved LAN IP and use Docker-aware firewall/network restrictions; do not expose the published HTTP port on the internet.
 
 ## 5. Open the dashboard
 
-Open **`http://home.energy:8080`**, not `https://`. Sign in, enter or retain your Octopus settings, select the meter and enable polling. Confirm recent readings arrive and your existing history is present.
+Open **`http://home.energy:8080`**, not `https://`. The dashboard opens without a login page or Sign out button. Enter or retain your Octopus settings, select the meter and enable polling. Confirm recent readings arrive and your existing history is present. Persistent notices identify both the unencrypted connection and disabled login.
 
-HTTP mode keeps HttpOnly/SameSite session cookies but deliberately omits the Secure flag and HSTS so HTTP login works. Requests with an untrusted Host/Origin or missing CSRF token are still rejected. Session expiry remains 12 hours after sign-in.
+Password-free mode creates no authentication cookies or password hashes. It has no login expiry. The browser obtains a CSRF token automatically; mutations without that token or a trusted Origin are still rejected. This token changes when the app restarts: reload the page if a settings change asks you to refresh and retry. HSTS is not sent in HTTP mode.
 
-If you previously used HTTPS at this hostname, the browser may remember HSTS and automatically upgrade HTTP requests to HTTPS. Remove only this application's remembered HSTS/site state using the browser's controls, or use a fresh dedicated hostname with matching DNS/Portainer settings. Clear old cookies for this app if an old Secure cookie prevents a new HTTP login. Do not disable browser security globally.
+If you previously used HTTPS at this hostname, the browser may remember HSTS and automatically upgrade HTTP requests to HTTPS. Remove only this application's remembered HSTS/site state using the browser's controls, or use a fresh dedicated hostname with matching DNS/Portainer settings. Old login cookies are ignored in password-free mode. Do not disable browser security globally.
 
 The health probe uses loopback HTTP in this mode; it does not read certificates or disable validation for any HTTPS connection.
 
 ## Backups and later changes
 
-Use the [backup and upgrade procedures](portainer-installation.md#8-backups-upgrades-and-recovery) with the currently deployed image tag and unchanged data directory. Backups contain secrets and need private storage. Revoke sessions when restoring an old backup.
+Use the [backup and upgrade procedures](portainer-installation.md#8-backups-upgrades-and-recovery) with the currently deployed image tag and unchanged data directory. Backups contain secrets and need private storage. Password-free startup revokes restored authenticated sessions automatically; when restoring directly into a password-protected deployment, reset the password to revoke restored sessions before serving it.
+
+To re-enable login, set `APP_AUTH_REQUIRED: "true"` (or remove it), mount a private bootstrap password file and configure `APP_ADMIN_PASSWORD_FILE` as in the [password setup](portainer-installation.md#4-create-the-bootstrap-password-file). Existing databases retain their old password hash; a fresh password-free database needs the bootstrap file on its first protected start. Use `energy-admin password-reset` if you need to change an existing password. Recreate the container and reload the browser. Previously revoked sessions do not become valid again, and ordinary protected sessions still have a fixed 12-hour lifetime.
 
 To return to HTTPS, obtain the certificate files and use the [HTTPS installation guide](portainer-installation.md) and original stack. Never simply change URL schemes without also changing the transport, trusted Origins, port mapping and mounts. A reverse-proxy deployment is a separate configuration; this HTTP mode does not automatically trust forwarded headers.

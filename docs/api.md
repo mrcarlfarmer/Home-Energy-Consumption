@@ -1,8 +1,14 @@
 # API
 
-The application exposes its current generated schema to authenticated users at `GET /api/openapi.json`. JSON request/response models are implemented with Pydantic; units appear in field names.
+The application exposes its current generated schema at `GET /api/openapi.json`, requiring authentication by default. JSON request/response models are implemented with Pydantic; units appear in field names.
 
 ## Authentication
+
+`APP_AUTH_REQUIRED` defaults to `true` and accepts only `true` or `false`. It is a deployment-only setting. Explicit `false` makes configuration, analytics, OpenAPI and SSE accessible without login; **anyone who can reach the app can read data and change settings**. It creates no password hash or authentication cookie, skips password bootstrap and the password watcher, and revokes existing persisted sessions on startup without deleting the saved password hash or application data.
+
+In password-free mode, `GET /api/auth/session` returns `authenticated:false`, `authentication_required:false` and a process-local CSRF token. The frontend opens the dashboard directly and hides Sign out. Send the token as `X-CSRF-Token` with mutations; trusted Origin/Host checks, request limits, redaction and upstream authentication still apply. The CSRF token is not an authentication credential and is available to anyone who can reach this endpoint. It rotates on restart; reload the page before retrying a stale-token rejection. Login and logout return 409 `authentication_disabled`.
+
+The remaining authentication/session behavior below applies when login is enabled. Successful login/session responses include `authentication_required:true`.
 
 `POST /api/auth/login` accepts `{"password":"..."}` and returns a CSRF token while setting an HttpOnly, SameSite=Strict session cookie. HTTPS is the default and adds the Secure flag and HSTS. Explicit `APP_TRANSPORT=http` omits those HTTPS-only protections; the browser connection is then unencrypted. The request must have a configured `Origin` matching the selected transport. Default ports 80/443 are normalized to the browser's port-free Origin form.
 

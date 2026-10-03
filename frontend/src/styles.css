@@ -39,7 +39,7 @@ label small { font-size: .8rem; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
 .check { flex-direction: row; align-items: center; margin: 12px 0; }
 .check input { width: auto; }
-#message:not(:empty), .transport-warning { padding: 14px; background: #fff1e1; color: #8b3617; border-radius: 8px; }
+#message:not(:empty), .transport-warning, .access-warning { padding: 14px; background: #fff1e1; color: #8b3617; border-radius: 8px; }
 .healthy { color: #16713e; }
 .warning { color: #946312; }
 .table-scroll { overflow-x: auto; max-height: 420px; }

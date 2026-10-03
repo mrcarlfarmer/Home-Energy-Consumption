@@ -217,6 +217,10 @@ class Store:
         async with self.write() as conn:
             await conn.execute("DELETE FROM admin_sessions WHERE token_digest=?", (digest,))
 
+    async def clear_sessions(self) -> None:
+        async with self.write() as conn:
+            await conn.execute("DELETE FROM admin_sessions")
+
     async def latest(self, device: str | None) -> dict[str, Any] | None:
         if device is None:
             return None

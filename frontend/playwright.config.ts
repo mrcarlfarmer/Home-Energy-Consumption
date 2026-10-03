@@ -9,10 +9,15 @@ export default defineConfig({
   testDir: "./e2e",
   workers: 1,
   use: { baseURL: "http://127.0.0.1:8765", browserName: "chromium" },
-  webServer: {
+  webServer: [{
     command: `${python} "${resolve("..", "tests", "serve.py")}"`,
     url: "http://127.0.0.1:8765/healthz",
     timeout: 30000,
     reuseExistingServer: false,
-  },
+  }, {
+    command: `${python} "${resolve("..", "tests", "serve.py")}" --no-login --port 8766`,
+    url: "http://127.0.0.1:8766/healthz",
+    timeout: 30000,
+    reuseExistingServer: false,
+  }],
 });

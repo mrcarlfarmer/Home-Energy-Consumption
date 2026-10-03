@@ -6,7 +6,7 @@ Build a lightweight, self-hosted electricity monitoring application for Raspberr
 
 The repository began as a greenfield project. This document preserves the approved design; the implementation is now in the repository. See `architecture.md` for the actual consolidated layout, `deployment.md` for setup, and `validation.md` for completed checks and outstanding provider/hardware acceptance gates.
 
-The HTTPS-specific sections below describe the default deployment. The later [explicit HTTP option](portainer-http-installation.md) provides a separate, certificate-free Portainer configuration for a trusted LAN; it does not silently downgrade existing HTTPS installations.
+The HTTPS/password-specific sections below describe the default deployment. The later [explicit HTTP option](portainer-http-installation.md) provides a separate, certificate-free and password-free Portainer configuration for a trusted LAN, using `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. It does not silently downgrade existing HTTPS installations. Anyone who can reach that optional deployment can view data and change settings; Host/Origin/CSRF controls remain enabled.
 
 ### Confirmed choices
 

@@ -1,6 +1,6 @@
 # Deployment
 
-This guide covers the default HTTPS deployment. For explicit certificate-free HTTP on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). The HTTP stack sets `APP_TRANSPORT=http` and needs only the password file, not certificate files.
+This guide covers the default password-protected HTTPS deployment. For explicit certificate-free HTTP without login on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). That stack sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`, with no password or certificate mounts. Anyone who can reach it can view data and change settings.
 
 ## Prerequisites
 

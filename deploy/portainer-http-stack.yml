@@ -7,20 +7,14 @@ services:
       - "${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTP_PORT:-8080}:8443"
     environment:
       APP_TRANSPORT: http
+      APP_AUTH_REQUIRED: "false"
       APP_DATABASE_PATH: /data/energy.sqlite3
-      APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       APP_ALLOWED_HOSTS: "${ENERGY_HOSTNAME:?Set the local hostname},${PI_LAN_IP:?Set the Pi LAN IPv4 address}"
       APP_ALLOWED_ORIGINS: "http://${ENERGY_HOSTNAME:?Set the local hostname}:${HTTP_PORT:-8080},http://${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTP_PORT:-8080}"
     volumes:
       - type: bind
         source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/data"
         target: /data
-        bind:
-          create_host_path: false
-      - type: bind
-        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/secrets/admin-password"
-        target: /run/secrets/admin_password
-        read_only: true
         bind:
           create_host_path: false
     user: "10001:10001"

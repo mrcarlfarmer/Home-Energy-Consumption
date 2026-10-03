@@ -39,6 +39,7 @@ export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 let csrf = "";
+export let authenticationRequired = true;
 export async function api<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
@@ -54,9 +55,10 @@ export async function api<T>(path: string, body?: unknown, signal?: AbortSignal)
   return data as T;
 }
 export async function session(password?: string): Promise<void> {
-  const result = await api<{ csrf_token: string }>(
+  const result = await api<{ csrf_token: string; authentication_required: boolean }>(
     password === undefined ? "/api/auth/session" : "/api/auth/login",
     password === undefined ? undefined : { password },
   );
   csrf = result.csrf_token;
+  authenticationRequired = result.authentication_required;
 }

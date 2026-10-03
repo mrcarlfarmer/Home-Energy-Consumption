@@ -7,7 +7,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - Live grid demand and separate collection, freshness, storage and connection indicators over SSE.
 - 24-hour, 7-day, 30-day and custom history, sampled peaks and trailing 15-minute demand.
 - Inverter comparisons at 3.68, 5 and 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
-- Password-protected settings for API-key replacement, account/meter discovery, connectivity testing and polling control.
+- Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
 - Permanent device-scoped raw history, rebuildable five-minute analytics, gap/coverage reporting and local-calendar/DST handling.
 - ARM64/AMD64 multi-stage builds, hash-locked dependencies and a 140 MiB container memory guardrail.
 
@@ -15,7 +15,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 
 ## Run on a Raspberry Pi
 
-**Using Portainer?** Choose the [certificate-free HTTP guide](docs/portainer-http-installation.md) and [HTTP stack](deploy/portainer-http-stack.yml), or the [HTTPS installation plan](docs/portainer-installation.md) and [HTTPS stack](deploy/portainer-stack.yml). Both cover migration from the local trial. HTTP leaves browser passwords, API-key entry and sessions unencrypted; use it only on a trusted LAN without public exposure.
+**Using Portainer?** Choose the [no-login, certificate-free HTTP guide](docs/portainer-http-installation.md) and [HTTP stack](deploy/portainer-http-stack.yml), or the [password-protected HTTPS installation plan](docs/portainer-installation.md) and [HTTPS stack](deploy/portainer-stack.yml). Both cover migration from the local trial. The HTTP stack needs no password/certificate files: anyone who can reach it can view data and change settings, and browser traffic is unencrypted. Use it only on a trusted LAN without public exposure.
 
 For the default HTTPS deployment with the Compose CLI:
 
@@ -31,7 +31,7 @@ The device ID is the **electricity smart meter EUI-64**, not the Home Mini seria
 
 - [Deployment and HTTPS](docs/deployment.md)
 - [Portainer installation and configuration](docs/portainer-installation.md)
-- [Certificate-free Portainer HTTP deployment](docs/portainer-http-installation.md)
+- [No-login, certificate-free Portainer HTTP deployment](docs/portainer-http-installation.md)
 - [Architecture](docs/architecture.md)
 - [API contracts](docs/api.md)
 - [Analytics methodology](docs/analytics-methodology.md)

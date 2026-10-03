@@ -2,6 +2,7 @@ import asyncio
 import logging
 import math
 import os
+import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -125,6 +126,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
     poller, analytics = Poller(store, kraken, hub), Analytics(store)
     analysis_lock, test_lock = asyncio.Lock(), asyncio.Lock()
     next_test = 0.0
+    anonymous_csrf = secrets.token_urlsafe(32)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -132,15 +134,23 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         tasks: list[asyncio.Task[None]] = []
         closing = False
         try:
-            encoded = await store.password_hash()
-            if encoded is None:
-                if settings.password_file is None:
-                    raise RuntimeError("First startup requires APP_ADMIN_PASSWORD_FILE")
-                password = settings.password_file.read_text(encoding="utf-8").rstrip("\r\n")
-                encoded = await asyncio.to_thread(hash_password, password)
-                await store.set_password(encoded)
-            app.state.auth = Auth(store, encoded)
-            await app.state.auth.restore_sessions()
+            app.state.auth = None
+            if settings.auth_required:
+                encoded = await store.password_hash()
+                if encoded is None:
+                    if settings.password_file is None:
+                        raise RuntimeError("First startup requires APP_ADMIN_PASSWORD_FILE")
+                    password = settings.password_file.read_text(encoding="utf-8").rstrip("\r\n")
+                    encoded = await asyncio.to_thread(hash_password, password)
+                    await store.set_password(encoded)
+                app.state.auth = Auth(store, encoded)
+                await app.state.auth.restore_sessions()
+            else:
+                await store.clear_sessions()
+                log.warning(
+                    "Login disabled: anyone who can reach this service can view data and "
+                    "change settings. Restrict access to a trusted network."
+                )
             app.state.fatal = False
             await poller.publish()
 
@@ -159,8 +169,9 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
                     asyncio.create_task(poller.run()),
                     asyncio.create_task(store.maintenance()),
                     asyncio.create_task(poller.health_timer()),
-                    asyncio.create_task(app.state.auth.watch_password()),
                 ]
+                if settings.auth_required:
+                    tasks.append(asyncio.create_task(app.state.auth.watch_password()))
                 for task in tasks:
                     task.add_done_callback(finished)
             yield
@@ -202,22 +213,26 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
             503, "storage_unavailable", "Database operation failed; inspect server logs"
         )
 
-    async def require(request: Request) -> Session:
-        auth: Auth = app.state.auth
-        session = auth.session(request.cookies.get(COOKIE))
-        if session is None:
+    def current_session(request: Request) -> Session | None:
+        auth: Auth | None = app.state.auth
+        return auth.session(request.cookies.get(COOKIE)) if auth is not None else None
+
+    async def require(request: Request) -> Session | None:
+        session = current_session(request)
+        if settings.auth_required and session is None:
             raise Problem(401, "session_required", "Sign in to continue")
         if request.method not in ("GET", "HEAD"):
-            import secrets
-
-            if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), session.csrf):
+            csrf = session.csrf if session is not None else anonymous_csrf
+            if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), csrf):
                 raise Problem(403, "csrf_denied", "Refresh the page and retry")
         return session
 
-    SessionDep = Annotated[Session, Depends(require)]
+    SessionDep = Annotated[Session | None, Depends(require)]
 
     @app.post("/api/auth/login", response_model=AuthState)
     async def login(data: Login, request: Request, response: Response) -> dict[str, Any]:
+        if not settings.auth_required:
+            raise Problem(409, "authentication_disabled", "Login is disabled for this deployment")
         address = request.client.host if request.client else "unknown"
         if not app.state.auth.allowed(address):
             raise Problem(429, "login_throttled", "Too many login attempts", 60)
@@ -233,14 +248,24 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
             secure=settings.secure,
             samesite="strict",
         )
-        return {"authenticated": True, "csrf_token": session.csrf}
+        return {
+            "authenticated": True,
+            "authentication_required": True,
+            "csrf_token": session.csrf,
+        }
 
     @app.get("/api/auth/session", response_model=AuthState)
     async def session_info(session: SessionDep) -> dict[str, Any]:
-        return {"authenticated": True, "csrf_token": session.csrf}
+        return {
+            "authenticated": session is not None,
+            "authentication_required": settings.auth_required,
+            "csrf_token": session.csrf if session is not None else anonymous_csrf,
+        }
 
     @app.post("/api/auth/logout")
     async def logout(response: Response, session: SessionDep) -> dict[str, bool]:
+        if session is None:
+            raise Problem(409, "authentication_disabled", "Login is disabled for this deployment")
         await app.state.auth.logout(session)
         response.delete_cookie(COOKIE, secure=settings.secure, httponly=True, samesite="strict")
         return {"ok": True}
@@ -357,10 +382,10 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         request: Request,
         queue: Annotated[asyncio.Queue[tuple[str, dict[str, Any]]], Depends(subscription)],
     ) -> AsyncIterator[ServerSentEvent]:
-        while app.state.auth.session(request.cookies.get(COOKIE)) is not None:
+        while not settings.auth_required or current_session(request) is not None:
             try:
                 event_id, snapshot = await asyncio.wait_for(queue.get(), 15)
-                if app.state.auth.session(request.cookies.get(COOKIE)) is None:
+                if settings.auth_required and current_session(request) is None:
                     return
                 yield ServerSentEvent(
                     event="snapshot",

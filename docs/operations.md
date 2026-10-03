@@ -19,6 +19,8 @@ Inspect bounded logs with `docker compose logs --tail 100 energy`. Logs contain 
 
 ## Password reset
 
+For the password-free Portainer setup, `APP_AUTH_REQUIRED=false` skips login and password bootstrap. Anyone who can reach the service can view data and change settings. Startup revokes old authenticated sessions but preserves existing password hashes, API credentials and history. Resetting a password does not re-enable login: change the deployment setting to `true`, supply a bootstrap password file if no hash exists, and recreate the container. See the [password-free deployment guide](portainer-http-installation.md#backups-and-later-changes).
+
 ```sh
 docker compose exec energy energy-admin password-reset
 ```
@@ -47,7 +49,7 @@ An online `docker compose exec ... backup` is supported by SQLite, but it adds a
 
 Stop collection and the container. Preserve the current database and any associated WAL/SHM files together before a recovery attempt; do not discard an active WAL. Validate the chosen backup with SQLite `PRAGMA integrity_check`.
 
-Restore into a stopped, correctly owned data directory/volume with no stale WAL/SHM from a different database. Mount the target volume in a one-off administrative container if necessary; never run two collectors against it. A backup may contain sessions that were subsequently signed out, so run `energy-admin password-reset` against the restored database before starting the service to revoke those sessions. Then confirm configuration, latest readings, history and health.
+Restore into a stopped, correctly owned data directory/volume with no stale WAL/SHM from a different database. Mount the target volume in a one-off administrative container if necessary; never run two collectors against it. A backup may contain sessions that were subsequently signed out, so run `energy-admin password-reset` against the restored database before starting a password-protected service to revoke those sessions. Password-free startup revokes restored sessions automatically and does not need a password reset. Then confirm configuration, latest readings, history and health.
 
 Schema migrations are transactional. An image refuses an unknown newer database schema. Before upgrading, take a consistent backup and preserve the current image tag/digest. Roll back a schema-changing upgrade only with the compatible backup/image pair.
 

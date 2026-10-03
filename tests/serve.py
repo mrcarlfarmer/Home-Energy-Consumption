@@ -1,5 +1,6 @@
 """Deterministic browser-test server; never used by the production image."""
 
+import argparse
 import asyncio
 import tempfile
 from pathlib import Path
@@ -43,10 +44,16 @@ async def seed(path: Path) -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-login", action="store_true")
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="energy-browser-test-") as temporary:
         directory = Path(temporary)
-        password = directory / "password"
-        password.write_text("fixture-only-password")
+        password = None
+        if not args.no_login:
+            password = directory / "password"
+            password.write_text("fixture-only-password")
         database = directory / "energy.sqlite3"
         asyncio.run(seed(database))
         uvicorn.run(
@@ -54,13 +61,14 @@ if __name__ == "__main__":
                 Settings(
                     database=database,
                     password_file=password,
+                    auth_required=not args.no_login,
                     secure=False,
                     start_workers=False,
                     allowed_hosts=("127.0.0.1",),
-                    allowed_origins=("http://127.0.0.1:8765",),
+                    allowed_origins=(f"http://127.0.0.1:{args.port}",),
                 )
             ),
             host="127.0.0.1",
-            port=8765,
+            port=args.port,
             log_level="warning",
         )
