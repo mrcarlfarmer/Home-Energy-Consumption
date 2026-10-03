@@ -1,5 +1,7 @@
 # Deployment
 
+This guide covers the default HTTPS deployment. For explicit certificate-free HTTP on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). The HTTP stack sets `APP_TRANSPORT=http` and needs only the password file, not certificate files.
+
 ## Prerequisites
 
 Use a Raspberry Pi with a 64-bit Linux OS, Docker Engine and the Docker Compose plugin. Keep host time synchronized. Store `/data` on a local filesystem, preferably SSD or high-endurance storage, not NFS/SMB. Reserve capacity for indefinite raw retention and backups.

@@ -2,6 +2,8 @@
 
 One process owns the collector, upstream token cache, bounded session cache, SSE hub and SQLite writer. Dashboard sessions are persisted in SQLite and restored into the cache on startup. FastAPI lifespan starts and supervises background tasks. The production entry point shuts the server down on unexpected worker termination rather than presenting a silently dead collector.
 
+Browser transport defaults to HTTPS. Explicit `APP_TRANSPORT=http` enables certificate-free trusted-LAN HTTP without changing the upstream Kraken HTTPS connection. HTTP retains password/CSRF/Host/Origin checks but cannot protect credentials or session cookies from network interception. The internal listener stays on port 8443 in either mode; the health probe follows the selected transport.
+
 ```mermaid
 flowchart LR
   Mini["Octopus Home Mini"] --> Kraken["Kraken cloud"]
@@ -11,7 +13,7 @@ flowchart LR
   Store --> Hub["Latest-state SSE hub"]
   Maintenance["Bounded rollup maintenance"] --> DB
   API["Authenticated FastAPI APIs"] --> DB
-  Browser["Bundled dashboard"] <-->|HTTPS JSON| API
+  Browser["Bundled dashboard"] <-->|JSON: HTTPS default, HTTP opt-in| API
   Hub -->|SSE| Browser
 ```
 
@@ -34,7 +36,7 @@ SSE sends complete state snapshots. Each subscriber has one replaceable pending 
 - `kraken.py`, `poller.py`, `streaming.py`: upstream operations, recovery scheduling and bounded live delivery.
 - `db/store.py`, `db/migrations/*.sql`: migrations, private WAL storage, persisted sessions, configuration/readings and rollup maintenance.
 - `analytics/intervals.py`, `analytics/service.py`: one shared calculation definition and range aggregation.
-- `cli.py`, `healthcheck.py`: operational utilities and certificate-validating liveness probe.
+- `cli.py`, `healthcheck.py`: operational utilities and transport-aware liveness probe that validates certificates in HTTPS mode.
 - `frontend/src`: typed vanilla UI, uPlot charts and bundled CSS.
 - `tests`: unit/integration tests, synthetic browser server and resource workloads.
 

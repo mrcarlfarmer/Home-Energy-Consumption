@@ -1,5 +1,7 @@
 # Raspberry Pi installation with Portainer
 
+**Want no certificates?** Use the [certificate-free HTTP installation guide](portainer-http-installation.md) and [HTTP stack](../deploy/portainer-http-stack.yml). It retains login protection but sends browser credentials unencrypted, so it is only appropriate for a trusted LAN. The instructions below remain the HTTPS alternative.
+
 ## Deployment choices
 
 This plan uses **Portainer with a Docker Standalone environment on a 64-bit Raspberry Pi**, one application container, native HTTPS and persistent local storage. It does not deploy anything automatically. If the environment is Docker Swarm, do not use this stack unchanged.

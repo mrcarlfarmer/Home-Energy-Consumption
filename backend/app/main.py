@@ -454,6 +454,11 @@ def run() -> None:
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = Settings.from_env()
+    if not settings.secure:
+        log.warning(
+            "HTTP mode enabled: browser credentials and sessions are unencrypted. "
+            "Restrict access to a trusted network; do not expose this port publicly."
+        )
     app = create_app(settings)
     server = uvicorn.Server(
         uvicorn.Config(
@@ -463,8 +468,8 @@ def run() -> None:
             workers=1,
             http="h11",
             proxy_headers=False,
-            ssl_certfile=str(settings.certificate),
-            ssl_keyfile=str(settings.private_key),
+            ssl_certfile=str(settings.certificate) if settings.certificate else None,
+            ssl_keyfile=str(settings.private_key) if settings.private_key else None,
             limit_concurrency=16,
             backlog=64,
             timeout_keep_alive=5,

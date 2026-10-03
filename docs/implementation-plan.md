@@ -6,13 +6,15 @@ Build a lightweight, self-hosted electricity monitoring application for Raspberr
 
 The repository began as a greenfield project. This document preserves the approved design; the implementation is now in the repository. See `architecture.md` for the actual consolidated layout, `deployment.md` for setup, and `validation.md` for completed checks and outstanding provider/hardware acceptance gates.
 
+The HTTPS-specific sections below describe the default deployment. The later [explicit HTTP option](portainer-http-installation.md) provides a separate, certificate-free Portainer configuration for a trusted LAN; it does not silently downgrade existing HTTPS installations.
+
 ### Confirmed choices
 
 | Area | Decision |
 |---|---|
 | Backend | Python/FastAPI, `aiosqlite`, `httpx`; no ORM |
 | Deployment | One container, one uvicorn worker, native Linux ARM64 support |
-| Dashboard access | Home LAN, dashboard password, HTTPS using a locally trusted certificate |
+| Dashboard access | Home LAN, dashboard password, HTTPS by default; later opt-in certificate-free HTTP for a trusted LAN |
 | Telemetry identity | Composite primary key using device ID and native `readAt`; one active device at a time |
 | Meter replacement | Keep previous device history isolated; never merge different meters silently |
 | Storage retention | Retain all raw readings; analytical rollups are disposable/rebuildable |
@@ -443,7 +445,7 @@ UTC bucket boundaries are stable between requests. Edge buckets report their act
 
 ### Common contract
 
-- Same-origin JSON and SSE, under HTTPS.
+- Same-origin JSON and SSE, under HTTPS by default. Explicit `APP_TRANSPORT=http` is a later trusted-LAN option with unencrypted browser traffic; it retains authentication/CSRF/Host/Origin checks but does not set Secure cookies or HSTS.
 - All application/configuration/telemetry/analytics endpoints require an authenticated session. Only login assets and minimal health endpoints are public.
 - Request/response models use Pydantic with unknown configuration fields forbidden and explicit range/size limits.
 - Accept RFC 3339 timestamps with timezone offsets; normalize to UTC and return `Z` timestamps. All requested intervals are half-open `[from,to)`.
@@ -635,7 +637,7 @@ Do not enable middleware that buffers/compresses SSE. If ordinary JSON gzip is n
 - Document a local CLI password-reset command that revokes sessions. Bootstrap secrets do not overwrite an existing password hash on each restart.
 - Issue cryptographically random opaque session IDs. Persist only token digests, absolute expiry and CSRF metadata in SQLite, with at most 32 sessions and a bounded in-memory cache. Routine restarts preserve sessions without extending the 12-hour expiry; logout/password reset revoke them. This supersedes the original memory-only session design.
 - Limit login attempts per client and globally with bounded limiter state and generic error messages. No unlimited dictionary keyed by attacker-supplied addresses.
-- Session cookie: `HttpOnly`, `Secure`, `SameSite=Strict`, path `/`, finite expiry. No bearer token in local storage or URL parameters.
+- Session cookie: `HttpOnly`, `SameSite=Strict`, path `/`, finite expiry; `Secure` in the default HTTPS mode. No bearer token in local storage or URL parameters. The later explicit HTTP option cannot provide transport confidentiality; see the [HTTP deployment guide](portainer-http-installation.md).
 - Require a session-associated CSRF token plus trusted Origin checks on configuration/test/logout mutations; protect login against cross-origin submissions too. Disable permissive CORS and validate Host against explicit allowed LAN names.
 - TLS uses a locally trusted leaf certificate and its private key mounted read-only into uvicorn. Generate/trust the certificate outside the image; never copy a local CA private key into the container.
 - Document hostname/IP SAN requirements and client trust installation. Do not disable certificate verification for browser or Kraken traffic.

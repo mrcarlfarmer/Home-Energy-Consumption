@@ -3,6 +3,9 @@ import { DemandChart } from "./charts";
 import "./styles.css";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
+const transportNotice = location.protocol === "http:"
+  ? "HTTP connection: your password, API key and session are not encrypted in transit. Use a trusted LAN only."
+  : "";
 let config: Config;
 let stream: EventSource | undefined;
 let chart: DemandChart | undefined;
@@ -42,7 +45,7 @@ function renderLogin(message = ""): void {
     <p>Private electricity monitoring and inverter sizing.</p>
     <form id="login"><label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
     <button type="submit">Sign in</button></form><p id="message" role="alert"></p>
-    <small>Credentials stay on your Raspberry Pi. Use your trusted HTTPS address.</small></main>`;
+    <small>${transportNotice || "Credentials stay on your Raspberry Pi. Use your trusted HTTPS address."}</small></main>`;
   text("message", message);
   element<HTMLFormElement>("login").onsubmit = async (event) => {
     event.preventDefault(); clearMessage();
@@ -210,6 +213,7 @@ async function renderDashboard(): Promise<void> {
   root.innerHTML = `<div id="dashboard"><header><div><p class="eyebrow">YOUR HOME, IN FOCUS</p><h1>Home Energy</h1></div>
     <button id="logout" class="secondary">Sign out</button></header><main>
     <p id="message" role="alert"></p>
+    ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="live-grid"><article class="live-card"><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
     <article><h2>Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">

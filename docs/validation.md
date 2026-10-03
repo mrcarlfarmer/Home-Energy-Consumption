@@ -52,6 +52,6 @@ These cannot be replaced by mocked tests or an AMD64/emulated workload:
 
 1. **A real Octopus account/meter:** verify the current device discovery relationship, authorization header, native timestamp semantics, 10-second grouping/peak interpretation, lookback and account-specific quotas. No real credentials are committed or required by CI.
 2. **A physical Raspberry Pi ARM64:** repeat the one-year workload on the intended Pi/storage/OS and prove total container-accounted memory stays below 150,000,000 bytes without OOM/restarts. Include concurrent collection, four SSE clients, login, health probes and maintenance.
-3. **Deployment's trusted HTTPS certificate:** confirm SANs/client trust and UID 10001 file access on the actual deployment host.
+3. **Deployment transport:** for default HTTPS, confirm certificate SANs/client trust and UID 10001 file access on the actual host. For explicit HTTP, confirm the trusted-LAN boundary, no public port exposure and acceptance of unencrypted browser credentials; no certificate is required.
 
 Until those gates are recorded, treat this as a working implementation with outstanding hardware/provider acceptance, not certified peak-metering accuracy or a measured universal Pi memory guarantee.

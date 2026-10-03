@@ -1,6 +1,6 @@
 # Home Energy Monitor
 
-A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-bit Linux and Docker. One non-root container serves the bundled web UI over HTTPS, collects telemetry in the background and stores it in SQLite WAL.
+A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-bit Linux and Docker. One non-root container serves the bundled web UI over HTTPS by default, collects telemetry in the background and stores it in SQLite WAL. An explicit trusted-LAN HTTP mode is available without certificates.
 
 ## Features
 
@@ -15,7 +15,9 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 
 ## Run on a Raspberry Pi
 
-**Using Portainer?** Follow the [Portainer installation plan](docs/portainer-installation.md) and its [ready-to-paste stack](deploy/portainer-stack.yml), including migration from the local trial.
+**Using Portainer?** Choose the [certificate-free HTTP guide](docs/portainer-http-installation.md) and [HTTP stack](deploy/portainer-http-stack.yml), or the [HTTPS installation plan](docs/portainer-installation.md) and [HTTPS stack](deploy/portainer-stack.yml). Both cover migration from the local trial. HTTP leaves browser passwords, API-key entry and sessions unencrypted; use it only on a trusted LAN without public exposure.
+
+For the default HTTPS deployment with the Compose CLI:
 
 1. Install Docker Engine and the Compose plugin on a **64-bit** OS.
 2. Follow [deployment](docs/deployment.md) to create an administrator password file and a locally trusted HTTPS certificate. Never put real secrets in Git.
@@ -29,6 +31,7 @@ The device ID is the **electricity smart meter EUI-64**, not the Home Mini seria
 
 - [Deployment and HTTPS](docs/deployment.md)
 - [Portainer installation and configuration](docs/portainer-installation.md)
+- [Certificate-free Portainer HTTP deployment](docs/portainer-http-installation.md)
 - [Architecture](docs/architecture.md)
 - [API contracts](docs/api.md)
 - [Analytics methodology](docs/analytics-methodology.md)
@@ -55,7 +58,7 @@ Set-Location ..
 .\.venv\Scripts\python -m ruff check backend tests
 ```
 
-On Linux, use `.venv/bin/python` instead. Browser tests start a loopback-only, synthetic HTTP fixture; production always requires HTTPS. The installed `energy-monitor` entry point validates production environment settings and starts exactly one uvicorn worker. Do not use uvicorn reload or additional workers: they would create duplicate collectors and independent session caches.
+On Linux, use `.venv/bin/python` instead. Browser tests start a loopback-only, synthetic HTTP fixture. The installed `energy-monitor` entry point defaults to HTTPS; certificate-free HTTP requires explicit `APP_TRANSPORT=http` and matching HTTP origins. It validates environment settings and starts exactly one uvicorn worker. Do not use uvicorn reload or additional workers: they would create duplicate collectors and independent session caches.
 
 Regenerate Python locks after deliberate dependency changes:
 

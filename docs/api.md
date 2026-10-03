@@ -4,7 +4,7 @@ The application exposes its current generated schema to authenticated users at `
 
 ## Authentication
 
-`POST /api/auth/login` accepts `{"password":"..."}` and returns a CSRF token while setting an HttpOnly, Secure, SameSite=Strict session cookie. The request must have a configured HTTPS `Origin`.
+`POST /api/auth/login` accepts `{"password":"..."}` and returns a CSRF token while setting an HttpOnly, SameSite=Strict session cookie. HTTPS is the default and adds the Secure flag and HSTS. Explicit `APP_TRANSPORT=http` omits those HTTPS-only protections; the browser connection is then unencrypted. The request must have a configured `Origin` matching the selected transport. Default ports 80/443 are normalized to the browser's port-free Origin form.
 
 `GET /api/auth/session` returns the current CSRF token. Send it as `X-CSRF-Token` with all subsequent mutations. `POST /api/auth/logout` revokes the session; associated SSE streams close at their next session check (within 15 seconds).
 

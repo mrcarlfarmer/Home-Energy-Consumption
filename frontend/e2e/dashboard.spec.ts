@@ -4,9 +4,11 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
+  await expect(page.getByText("HTTP connection:", { exact: false })).toBeVisible();
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator("#stream-health")).toHaveText("Dashboard connected");
+  await expect(page.locator(".transport-warning")).toContainText("not encrypted in transit");
   await expect(page.locator("#demand")).toHaveText("4");
   await expect(page.locator("#thresholds tr")).toHaveCount(3);
   await expect(page.locator("#chart canvas").first()).toBeVisible();
