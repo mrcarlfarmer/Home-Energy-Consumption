@@ -1,0 +1,57 @@
+services:
+  energy:
+    image: "${ENERGY_IMAGE:?Set the ARM64 image tag built on the Pi}"
+    platform: linux/arm64
+    pull_policy: never
+    ports:
+      - "${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTPS_PORT:-8443}:8443"
+    environment:
+      APP_DATABASE_PATH: /data/energy.sqlite3
+      APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      APP_TLS_CERT_FILE: /run/secrets/tls_certificate
+      APP_TLS_KEY_FILE: /run/secrets/tls_private_key
+      APP_ALLOWED_HOSTS: "${ENERGY_HOSTNAME:?Set a hostname covered by the certificate},${PI_LAN_IP:?Set the Pi LAN IPv4 address}"
+      APP_ALLOWED_ORIGINS: "https://${ENERGY_HOSTNAME:?Set the hostname}:${HTTPS_PORT:-8443},https://${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTPS_PORT:-8443}"
+    volumes:
+      - type: bind
+        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/data"
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/secrets/admin-password"
+        target: /run/secrets/admin_password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/secrets/energy.pem"
+        target: /run/secrets/tls_certificate
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/secrets/energy-key.pem"
+        target: /run/secrets/tls_private_key
+        read_only: true
+        bind:
+          create_host_path: false
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=8388608,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    mem_limit: 140m
+    memswap_limit: 140m
+    pids_limit: 64
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"

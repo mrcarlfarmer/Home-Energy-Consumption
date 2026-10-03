@@ -1,0 +1,50 @@
+services:
+  energy:
+    build:
+      context: .
+    image: home-energy-monitor:local
+    ports:
+      - "${LAN_BIND_ADDRESS:?Set the Pi LAN address}:8443:8443"
+    environment:
+      APP_DATABASE_PATH: /data/energy.sqlite3
+      APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      APP_TLS_CERT_FILE: /run/secrets/tls_certificate
+      APP_TLS_KEY_FILE: /run/secrets/tls_private_key
+      APP_ALLOWED_HOSTS: "${APP_ALLOWED_HOSTS:?Set trusted LAN hostnames}"
+      APP_ALLOWED_ORIGINS: "${APP_ALLOWED_ORIGINS:?Set HTTPS origins}"
+    volumes:
+      - energy_data:/data
+    secrets:
+      - admin_password
+      - tls_certificate
+      - tls_private_key
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=8388608,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    mem_limit: 140m
+    memswap_limit: 140m
+    pids_limit: 64
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  energy_data:
+
+secrets:
+  admin_password:
+    file: ${ADMIN_PASSWORD_SECRET_FILE:?Set administrator password file path}
+  tls_certificate:
+    file: ${TLS_CERTIFICATE_FILE:?Set locally trusted certificate path}
+  tls_private_key:
+    file: ${TLS_PRIVATE_KEY_FILE:?Set TLS private key path}
