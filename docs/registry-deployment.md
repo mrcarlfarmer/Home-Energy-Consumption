@@ -21,7 +21,8 @@ The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKE
 | Image publishing token | GitHub Actions' automatic `GITHUB_TOKEN`; never source code |
 | Private image pull token | Portainer's registry credentials; a classic GitHub PAT with `read:packages` and access to the package |
 | Octopus API key | Enter in the running dashboard; stored in the Pi's private SQLite database |
-| Optional dashboard password/TLS key | Private files on the Docker endpoint, mounted only when using protected HTTPS |
+| Dashboard password | Required private file on the Docker endpoint, mounted read-only by both Portainer stacks; only its hash is stored in SQLite |
+| TLS private key | Private file on the Docker endpoint, mounted read-only for HTTPS only |
 
 The build and synthetic tests do **not** call Octopus and do not need its API key. Do not add it to Docker build arguments, build secrets, workflow environment variables or image layers. Moving the repository to private does not make an embedded credential safe. The workflow publishes generic code, not your database or runtime settings; `.dockerignore` excludes `.env`, `secrets`, `data` and SQLite files.
 
@@ -68,13 +69,14 @@ ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
+ENERGY_ADMIN_USERNAME=admin
 HTTP_PORT=8080
 ```
 
 For HTTPS use the original stack and `HTTPS_PORT=8443` instead, plus its existing private file preparation. Both stacks request `linux/arm64`; GHCR's multi-architecture manifest supplies the appropriate image. Neither embeds runtime credentials.
 
 4. Deploy/update the stack. The default `missing` pull policy downloads the chosen reference if absent, reusing an identical pinned image if present. Portainer may also offer **Re-pull image and redeploy**; enable it when deliberately refreshing a tag. Do not set `never` for an image that has not been downloaded.
-5. Confirm the container is healthy and running the intended reference. Open `http://home.energy:8080`, check settings/history and verify fresh telemetry with polling enabled. A successful deployment request alone is not a health check.
+5. Confirm the container is healthy and running the intended reference. Open `http://home.energy:8080`, sign in as `admin` (or your configured username), check settings/history and verify fresh telemetry with polling enabled. A successful deployment request alone is not a health check.
 
 Both Portainer stacks set `container_name: home-energy`, rather than Compose's generated `home-energy-energy-1`. For an existing Web editor stack, add this line under the `energy:` service and update the same stack; the container is recreated but the bind-mounted data stays intact. Do not rename it only in the Containers view, as the stack configuration should remain the source of truth. The fixed name permits only one such container on a Docker endpoint; do not deploy the HTTP and HTTPS alternatives simultaneously.
 
@@ -155,5 +157,8 @@ The existing [native Pi build instructions](portainer-installation.md#2-build-th
 | Manifest unknown | Use a completed run's published tag/digest, not a commit whose publication is pending/failed |
 | No ARM64 manifest | Use this pipeline's multi-architecture application reference, not an attestation manifest or old AMD64 image |
 | Old application after update | Check actual image reference/digest, change `ENERGY_IMAGE`, and recreate the stack |
+| Missing password bind mount | Create `${ENERGY_ROOT}/secrets/admin-password` on the Pi before deployment, owned by UID/GID 10001 with mode 0400; see the HTTP guide |
+| New file password rejected | Existing database hashes are retained; use `docker exec -it home-energy energy-admin password-reset` interactively |
+| SSL protocol error on port 8080 | HTTP stack requires `http://`, not `https://`; remembered HSTS may require using the IP URL |
 
 References: [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry), [Portainer custom registries](https://docs.portainer.io/admin/registries/add/custom), [Portainer stack updates](https://docs.portainer.io/user/docker/stacks/edit).

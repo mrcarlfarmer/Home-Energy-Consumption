@@ -6,7 +6,7 @@ Build a lightweight, self-hosted electricity monitoring application for Raspberr
 
 The repository began as a greenfield project. This document preserves the approved design; the implementation is now in the repository. See `architecture.md` for the actual consolidated layout, `deployment.md` for setup, and `validation.md` for completed checks and outstanding provider/hardware acceptance gates.
 
-The HTTPS/password-specific sections below describe the default deployment. The later [explicit HTTP option](portainer-http-installation.md) provides a separate, certificate-free and password-free Portainer configuration for a trusted LAN, using `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. It does not silently downgrade existing HTTPS installations. Anyone who can reach that optional deployment can view data and change settings; Host/Origin/CSRF controls remain enabled.
+The HTTPS-specific sections below describe the default deployment. The later [explicit HTTP option](portainer-http-installation.md) provides certificate-free Portainer deployment for a trusted LAN. Both supplied stacks now require username/password login (`APP_AUTH_REQUIRED=true`); HTTP still leaves credentials and sessions unencrypted. The single administrator username defaults to `admin` and is configurable through `ENERGY_ADMIN_USERNAME` in Portainer (`APP_ADMIN_USERNAME` in the application). Host/Origin/CSRF controls remain enabled. Explicit password-free mode remains available as an opt-out, not the supplied stack default.
 
 ### Confirmed choices
 
@@ -14,7 +14,7 @@ The HTTPS/password-specific sections below describe the default deployment. The 
 |---|---|
 | Backend | Python/FastAPI, `aiosqlite`, `httpx`; no ORM |
 | Deployment | One container, one uvicorn worker, native Linux ARM64 support |
-| Dashboard access | Home LAN, dashboard password, HTTPS by default; later opt-in certificate-free HTTP for a trusted LAN |
+| Dashboard access | Home LAN, username/password, HTTPS by default; opt-in certificate-free HTTP for a trusted LAN |
 | Telemetry identity | Composite primary key using device ID and native `readAt`; one active device at a time |
 | Meter replacement | Keep previous device history isolated; never merge different meters silently |
 | Storage retention | Retain all raw readings; analytical rollups are disposable/rebuildable |
@@ -460,7 +460,7 @@ UTC bucket boundaries are stable between requests. Edge buckets report their act
 
 | Method / endpoint | Purpose |
 |---|---|
-| `POST /api/auth/login` | Verify password, issue secure session cookie |
+| `POST /api/auth/login` | Verify username/password, issue HttpOnly/SameSite session cookie (Secure only over HTTPS) |
 | `GET /api/auth/session` | Read authenticated state and obtain CSRF token |
 | `POST /api/auth/logout` | Revoke session and close associated streams |
 | `GET /api/config` | Redacted configuration, revision and known device labels |
@@ -649,7 +649,7 @@ Do not enable middleware that buffers/compresses SSE. If ordinary JSON gzip is n
 
 ### Views
 
-1. **Login:** password field, error state, successful redirect and expired-session handling.
+1. **Login:** username and password fields, generic invalid-credentials error, successful redirect and expired-session handling.
 2. **Live:** large demand value with W/kW display, native measurement time/age, polling state, last successful API contact, backoff retry time and storage warnings.
 3. **Analysis:** 24h/7d/30d/custom range controls, daily peak cards/chart, sampled demand envelope, weighted mean and trailing 15-minute curve, threshold comparison table and prominent coverage.
 4. **Settings:** redacted credential state, account/device selection, API-key replacement, connectivity test, poll toggle/interval and display timezone.

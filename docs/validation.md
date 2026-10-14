@@ -9,6 +9,12 @@
 - Chromium tests use the real FastAPI/SSE server with synthetic telemetry: login, live state, chart rendering, settings, presets, missing data and logout.
 - CI checks Python formatting/lint/types/tests, the TypeScript/frontend build, Chromium scenarios and AMD64/ARM64 image builds.
 
+## Authentication and publication update (2026-10-14)
+
+The username/password update (`779f26b`) passed 54 backend tests, Ruff, strict mypy, the production frontend build and seven Chromium scenarios. Coverage includes custom usernames, missing/wrong credentials, no session creation for invalid identity, signed-out API/SSE/OpenAPI access, CSRF, logout and the explicit password-free opt-out.
+
+Both Portainer stack configurations were checked for enabled authentication, default username `admin` and the read-only password-file mount. The [Verify run](https://github.com/mrcarlfarmer/Home-Energy-Consumption/actions/runs/38625005508) passed tests, the AMD64/ARM64 container job and verified image publication. This does not prove deployment on the user's Pi: after pulling/redeploying, check login, retained data and fresh telemetry locally. HTTP authentication does not encrypt credentials or sessions.
+
 ## Resource workload
 
 The following checks were completed on 2026-10-03:

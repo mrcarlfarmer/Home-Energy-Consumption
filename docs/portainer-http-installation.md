@@ -12,7 +12,7 @@ This assumes 64-bit Raspberry Pi OS/Debian and Portainer managing a Docker Stand
 
 Follow [registry access and image selection](registry-deployment.md) to add GHCR to Portainer if the image is private. Copy the exact image digest from a successful `Verify` run's Summary for `ENERGY_IMAGE`. Check the package's actual visibility in GitHub rather than assuming it follows repository visibility; a classic read-only package PAT belongs in Portainer's registry credentials, not the stack.
 
-For a local-build fallback, use the [native Pi build instructions](portainer-installation.md#2-build-the-image-on-the-pi) or [ARM64 image transfer](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image), then set `ENERGY_PULL_POLICY=never`. Older images from before password-free support still require login.
+For a local-build fallback, use the [native Pi build instructions](portainer-installation.md#2-build-the-image-on-the-pi) or [ARM64 image transfer](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image), then set `ENERGY_PULL_POLICY=never`. Use a current image that supports username/password login.
 
 ## 2. Prepare storage
 
@@ -32,11 +32,15 @@ No certificates are needed, but create a private password file before updating t
 ```sh
 IFS= read -r -s -p "Dashboard password (12+ characters): " PASSWORD
 printf '\n'
+sudo install -m 400 -o 10001 -g 10001 /dev/null /opt/home-energy/secrets/admin-password
 printf '%s\n' "$PASSWORD" | sudo tee /opt/home-energy/secrets/admin-password >/dev/null
 unset PASSWORD
 sudo chown 10001:10001 /opt/home-energy/secrets/admin-password
 sudo chmod 400 /opt/home-energy/secrets/admin-password
+sudo ls -l /opt/home-energy/secrets/admin-password
 ```
+
+The file is private before password content is written; the listing should show `-r--------` and owner/group `10001`. The prompt keeps the password out of shell history. Do not run this block again unless deliberately replacing the bootstrap file.
 
 For a fresh/password-free database this bootstraps the hash. If an old administrator hash already exists, the file does not replace it: use your previous password or reset it while the old password-free container is still running with `docker exec -it home-energy energy-admin password-reset`. That reset preserves telemetry/configuration. Do not put passwords in Portainer environment variables or Git.
 
@@ -109,5 +113,7 @@ The health probe uses loopback HTTP in this mode; it does not read certificates 
 Use the [backup and upgrade procedures](portainer-installation.md#8-backups-upgrades-and-recovery) with the current image and unchanged data directory. Backups contain secrets; reset the password to revoke restored sessions before serving restored data.
 
 When upgrading a previously password-free stack, prepare the password file first, wait for image publication, then **Pull and redeploy** with image re-pulling. The username defaults to `admin` and is configured by `ENERGY_ADMIN_USERNAME`; it is not secret. Existing password hashes are retained. Username/password are mandatory in login requests; older browser clients must reload after upgrading.
+
+If you have already prepared the file, do not recreate it or delete the data directory. Confirm the existing stored password (or reset it interactively), keep the same Portainer variables, pull/redeploy with image re-pulling enabled, and reload the browser. Verify signed-out users cannot access telemetry/settings, then sign in and confirm retained history and fresh readings. The login shell and minimal health endpoints remain public by design.
 
 To return to HTTPS, obtain the certificate files and use the [HTTPS installation guide](portainer-installation.md) and original stack. Never simply change URL schemes without also changing the transport, trusted Origins, port mapping and mounts. A reverse-proxy deployment is a separate configuration; this HTTP mode does not automatically trust forwarded headers.
