@@ -121,6 +121,7 @@ test("polling errors leave the saved state unchanged and controls usable", async
   await expect(page.locator("#message")).toHaveText("Synthetic configuration failure");
   await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Save interval", exact: true })).toBeEnabled();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Enable polling", { exact: true })).not.toBeChecked();
 });
