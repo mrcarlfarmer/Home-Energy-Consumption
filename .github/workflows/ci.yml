@@ -22,6 +22,7 @@ jobs:
       - run: python -m pip install --no-deps --no-build-isolation -e .
       - run: ruff check backend tests
       - run: ruff format --check backend tests
+      - run: ruff check .github/scripts && ruff format --check .github/scripts
       - run: mypy backend/app
       - run: pytest -q
       - run: npm ci && npm run build
@@ -59,8 +60,8 @@ jobs:
       - name: Select image name
         id: image
         env:
-          REPOSITORY: ${{ github.repository }}
-        run: echo "name=ghcr.io/${REPOSITORY,,}-private" >> "$GITHUB_OUTPUT"
+          PACKAGE: ${{ vars.GHCR_PACKAGE || github.repository }}
+        run: echo "name=ghcr.io/${PACKAGE,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -68,6 +69,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check private repository publication target
+        if: github.event.repository.private
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: python3 .github/scripts/check_registry_visibility.py
       - name: Publish ARM64 and AMD64 image
         id: build
         uses: docker/build-push-action@v6
@@ -83,37 +89,11 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Verify private registry access
+      - name: Verify private repository image access
+        if: github.event.repository.private
         env:
           IMAGE: ${{ steps.image.outputs.name }}
-          REVISION: ${{ github.sha }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from urllib.error import HTTPError
-          from urllib.parse import urlencode
-          from urllib.request import Request, urlopen
-
-          image = os.environ["IMAGE"].removeprefix("ghcr.io/")
-          query = urlencode({"service": "ghcr.io", "scope": f"repository:{image}:pull"})
-          try:
-              with urlopen(f"https://ghcr.io/token?{query}", timeout=30) as response:
-                  token = json.load(response)["token"]
-              request = Request(
-                  f"https://ghcr.io/v2/{image}/manifests/sha-{os.environ['REVISION']}",
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Accept": "application/vnd.oci.image.index.v1+json",
-                  },
-              )
-              with urlopen(request, timeout=30):
-                  raise RuntimeError("Image is publicly downloadable; review package visibility")
-          except HTTPError as error:
-              if error.code not in (401, 403):
-                  raise
-              print("Anonymous pull denied; private registry authentication is required.")
-          PY
+        run: python3 .github/scripts/check_registry_visibility.py
       - name: Write deployment references
         env:
           IMAGE: ${{ steps.image.outputs.name }}

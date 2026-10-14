@@ -63,7 +63,7 @@ Use `home.energy` specifically for this app. Cookies are host-scoped, not isolat
 4. Set these variables, replacing the digest placeholder with the reference from the successful publication:
 
 ```dotenv
-ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption-private@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption@sha256:REPLACE_WITH_PUBLISHED_DIGEST
 ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2

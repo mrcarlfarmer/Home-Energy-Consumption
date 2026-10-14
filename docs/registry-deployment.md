@@ -7,12 +7,12 @@ GitHub Actions builds and publishes the application so the Pi only downloads an 
 The `Verify` workflow runs backend checks, browser scenarios and an AMD64/ARM64 container build. Only after **both verification jobs succeed**, a push to `main` publishes to:
 
 ```text
-ghcr.io/mrcarlfarmer/home-energy-consumption-private:sha-<full-40-character-commit>
+ghcr.io/mrcarlfarmer/home-energy-consumption:sha-<full-40-character-commit>
 ```
 
 Pull requests and other branches never publish. You can also run `Verify` manually from Actions on `main`; other manually selected branches only validate. There are no release-tag or `latest` aliases: each deployment selects a verified commit explicitly, rather than silently following a moving image tag.
 
-The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. After publishing, a check fails the job if the image can be downloaded anonymously. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
+The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
 
 ## Secret boundaries
 
@@ -31,9 +31,11 @@ If a future workflow genuinely needs an external API credential, add it through 
 
 ## Registry visibility and access
 
-The workflow now publishes to the separate `home-energy-consumption-private` package, not the earlier publicly pullable `home-energy-consumption` package. New GHCR packages default to private; the workflow does not make packages public or change repository visibility. Check actual package visibility before relying on private access.
+The source repository and the existing `home-energy-consumption` package are currently public. The pipeline does not change repository/package visibility. Images contain application code, not your runtime credentials. Check actual package visibility before relying on private access.
 
-**GitHub does not allow changing a public package back to private.** The original public package's images contain no runtime credentials, but they cannot be recalled. Future builds use the new package name so making the source repository private does not leave future images publishing to the old public package. Do not change the new package to public if you want to preserve this boundary.
+**GitHub does not allow changing a public package back to private.** Public images cannot be recalled. If you make the repository private, the workflow checks anonymous package access **before uploading** and refuses to publish private source to the current public package. It checks again after publication. Network/registry errors fail explicitly rather than being treated as privacy.
+
+Before your first private-source publication, set the Actions repository variable **`GHCR_PACKAGE`** to a new package path, for example `mrcarlfarmer/home-energy-internal`, and ensure it is private and grants this repository publishing access. The image name defaults to `github.repository` when the variable is absent. New GHCR packages normally start private, but verify that; do not assume repository visibility controls it. Do not reuse the already-public `home-energy-consumption` or `home-energy-consumption-private` packages. The latter was created during rollout checking and also allowed anonymous access; neither contains runtime secrets. A private-source run intentionally fails if its selected package is public.
 
 **Private images (recommended if you plan to make the repository private):**
 
@@ -61,7 +63,7 @@ sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data
 3. Set the variables below, replacing the digest placeholder with the published reference:
 
 ```dotenv
-ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption-private@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption@sha256:REPLACE_WITH_PUBLISHED_DIGEST
 ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
