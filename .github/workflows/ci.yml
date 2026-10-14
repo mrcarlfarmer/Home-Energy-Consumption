@@ -2,6 +2,7 @@ name: Verify
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -42,3 +43,57 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  publish:
+    name: Publish verified image
+    needs: [test, container]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-publish-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish ARM64 and AMD64 image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=min
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Write deployment references
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo '## Verified container image'
+            echo
+            printf 'Commit tag: `%s:sha-%s`\n\n' "$IMAGE" "$REVISION"
+            printf 'Exact Portainer image: `%s@%s`\n\n' "$IMAGE" "$DIGEST"
+            echo 'Platforms: linux/arm64 and linux/amd64.'
+            echo 'Deploy manually after taking a database backup. Package visibility is managed separately in GitHub.'
+          } >> "$GITHUB_STEP_SUMMARY"

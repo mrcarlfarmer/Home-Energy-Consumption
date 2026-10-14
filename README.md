@@ -15,6 +15,8 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 
 ## Run on a Raspberry Pi
 
+**No Pi build required:** [GitHub Actions publishes verified ARM64/AMD64 images to GHCR](docs/registry-deployment.md). Select a successful run's digest and let Portainer download it. Private packages use a read-only package token stored in Portainer; publishing uses GitHub's automatic token. Your Octopus key stays in the Pi's private database, never in the image or build pipeline.
+
 **Using Portainer?** Choose the [no-login, certificate-free HTTP guide](docs/portainer-http-installation.md) and [HTTP stack](deploy/portainer-http-stack.yml), or the [password-protected HTTPS installation plan](docs/portainer-installation.md) and [HTTPS stack](deploy/portainer-stack.yml). Both cover migration from the local trial. The HTTP stack needs no password/certificate files: anyone who can reach it can view data and change settings, and browser traffic is unencrypted. Use it only on a trusted LAN without public exposure.
 
 For the default HTTPS deployment with the Compose CLI:
@@ -32,6 +34,7 @@ The device ID is the **electricity smart meter EUI-64**, not the Home Mini seria
 - [Deployment and HTTPS](docs/deployment.md)
 - [Portainer installation and configuration](docs/portainer-installation.md)
 - [No-login, certificate-free Portainer HTTP deployment](docs/portainer-http-installation.md)
+- [Automated image publishing and GHCR deployment](docs/registry-deployment.md)
 - [Architecture](docs/architecture.md)
 - [API contracts](docs/api.md)
 - [Analytics methodology](docs/analytics-methodology.md)

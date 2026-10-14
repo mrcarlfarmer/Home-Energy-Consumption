@@ -1,8 +1,8 @@
 services:
   energy:
-    image: "${ENERGY_IMAGE:?Set the ARM64 image tag built on the Pi}"
+    image: "${ENERGY_IMAGE:?Set a published GHCR image reference or local ARM64 tag}"
     platform: linux/arm64
-    pull_policy: never
+    pull_policy: "${ENERGY_PULL_POLICY:-missing}"
     ports:
       - "${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTPS_PORT:-8443}:8443"
     environment:

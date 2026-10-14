@@ -4,36 +4,15 @@ Use [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml) for **
 
 **Tradeoff:** anyone who can reach this service can view electricity data, change settings and control collection. HTTP also leaves telemetry and API-key entry unencrypted, so intercepted traffic can be observed or modified. CSRF/Host/Origin checks do not authenticate people on your network. Use this only on a trusted LAN with no router port forwarding or public/untrusted-network exposure. The Pi's connection to Octopus still uses verified HTTPS and its API credentials.
 
-HTTPS and password authentication remain the application's defaults, and the existing HTTPS stack is unchanged. This separate stack explicitly sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. These are deployment settings, not switches exposed to unauthenticated dashboard users. "Trusted LAN" describes the deployment boundary, not an automatic guarantee made by the application.
+HTTPS and password authentication remain the application's defaults. This separate stack explicitly sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. These are deployment settings, not switches exposed to unauthenticated dashboard users. "Trusted LAN" describes the deployment boundary, not an automatic guarantee made by the application.
 
-## 1. Build the updated image on the Pi
+## 1. Select a published image
 
-This assumes 64-bit Raspberry Pi OS/Debian and Portainer managing a Docker Standalone endpoint. Git and Docker Buildx are required. If you have not cloned the repository yet:
+This assumes 64-bit Raspberry Pi OS/Debian and Portainer managing a Docker Standalone endpoint. **You no longer need to build on the Pi.** GitHub Actions publishes verified ARM64/AMD64 images to GHCR automatically.
 
-```sh
-git clone --branch main --single-branch \
-  https://github.com/mrcarlfarmer/Home-Energy-Consumption.git "$HOME/home-energy-source"
-```
+Follow [registry access and image selection](registry-deployment.md) to add GHCR to Portainer if the image is private. Copy the exact image digest from a successful `Verify` run's Summary for `ENERGY_IMAGE`. The package remains private unless you explicitly change its visibility; a classic read-only package PAT belongs in Portainer's registry credentials, not the stack.
 
-For either a new or existing clean `main` checkout:
-
-```sh
-cd "$HOME/home-energy-source" &&
-if [ "$(git branch --show-current)" != main ] || [ -n "$(git status --porcelain)" ]; then
-  echo "Stop: use a clean main checkout before updating and building."
-else
-  git pull --ff-only origin main &&
-  APP_REV=$(git rev-parse --short=12 HEAD) &&
-  ENERGY_IMAGE="home-energy-monitor:pi-${APP_REV}" &&
-  docker buildx build --platform linux/arm64 --load --tag "$ENERGY_IMAGE" . &&
-  docker image inspect "$ENERGY_IMAGE" --format '{{.Os}}/{{.Architecture}} {{.Id}}' &&
-  printf 'ENERGY_IMAGE=%s\n' "$ENERGY_IMAGE"
-fi
-```
-
-If Git reports local changes or a non-fast-forward update, resolve that before building; do not overwrite your work. Expect `linux/arm64` from the inspection. Copy the printed image tag for Portainer. Pull and rebuild first: images from before password-free support still require login, even if you paste the new stack configuration.
-
-The image must exist on the Pi's Docker endpoint. If building elsewhere, use an ARM64-capable builder and the [image transfer procedure](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image); do not copy the Windows AMD64 development image. Build-time RAM and disk needs exceed the 140 MiB runtime limit.
+For a local-build fallback, use the [native Pi build instructions](portainer-installation.md#2-build-the-image-on-the-pi) or [ARM64 image transfer](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image), then set `ENERGY_PULL_POLICY=never`. Older images from before password-free support still require login.
 
 ## 2. Prepare storage
 
@@ -81,17 +60,18 @@ Use `home.energy` specifically for this app. Cookies are host-scoped, not isolat
 1. Select the Pi's Docker Standalone environment.
 2. Choose **Stacks > Add stack**, name it `home-energy`, and use **Web editor**. If this stack already exists, back up its database and edit that same stack rather than starting a second collector.
 3. Paste [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml), not the HTTPS stack.
-4. Set these variables, replacing the image placeholder with the tag printed by the build:
+4. Set these variables, replacing the digest placeholder with the reference from the successful publication:
 
 ```dotenv
-ENERGY_IMAGE=home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
 HTTP_PORT=8080
 ```
 
-5. Leave image re-pulling disabled: `pull_policy: never` requires the locally built image.
+5. Allow the image to be pulled from GHCR; `missing` downloads a new digest if absent. For a private package configure the Portainer registry first. Local-build users must instead set `ENERGY_PULL_POLICY=never`.
 6. Deploy/update the stack and confirm the container becomes healthy.
 
 The only host mount is the private data directory. There are no password/certificate mounts or TLS variables. Do not put the Octopus API key in the stack or its environment-variable form.

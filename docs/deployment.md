@@ -2,6 +2,8 @@
 
 This guide covers the default password-protected HTTPS deployment. For explicit certificate-free HTTP without login on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). That stack sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`, with no password or certificate mounts. Anyone who can reach it can view data and change settings.
 
+For Portainer, prefer [verified GHCR images](registry-deployment.md) rather than building on the Pi. The development Compose flow below remains a local-build option. Publishing needs only GitHub's automatic token; runtime Octopus credentials stay on the Docker endpoint.
+
 ## Prerequisites
 
 Use a Raspberry Pi with a 64-bit Linux OS, Docker Engine and the Docker Compose plugin. Keep host time synchronized. Store `/data` on a local filesystem, preferably SSD or high-endurance storage, not NFS/SMB. Reserve capacity for indefinite raw retention and backups.

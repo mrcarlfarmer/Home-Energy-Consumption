@@ -4,9 +4,11 @@
 
 ## Deployment choices
 
+**Recommended: download a verified image from GHCR**, using the [automated publishing and registry deployment guide](registry-deployment.md). This eliminates Git/Buildx and local builds on the Pi. Continue below for HTTPS files, storage and migration; replace local `ENERGY_IMAGE` examples with the published digest and set `ENERGY_PULL_POLICY=missing`. For private packages add read-only registry credentials in Portainer.
+
 This plan uses **Portainer with a Docker Standalone environment on a 64-bit Raspberry Pi**, one application container, native HTTPS and persistent local storage. It does not deploy anything automatically. If the environment is Docker Swarm, do not use this stack unchanged.
 
-The recommended route is to build the ARM64 image on the Pi, then paste [the Portainer stack](../deploy/portainer-stack.yml) into Portainer's Web editor. No image registry or paid relative-path feature is required. The stack deliberately has no `build:` context and uses `pull_policy: never`: the selected image must already exist on the **Pi's Docker endpoint**, not just on your Windows PC or the Portainer server.
+The local-build fallback below builds the ARM64 image on the Pi, then uses [the Portainer stack](../deploy/portainer-stack.yml) in Portainer's Web editor. No paid relative-path feature is required. The stack has no `build:` context and defaults to `pull_policy: missing` for registry images. Set `ENERGY_PULL_POLICY=never` for a local build: that image must already exist on the **Pi's Docker endpoint**, not just on your Windows PC or the Portainer server.
 
 Build from **`main`**, which contains the application, polling controls, short chart ranges, persistent login sessions and this installation configuration. Tag the image with the actual source commit so the installed version is identifiable. This is the initial native-Pi acceptance deployment, not a claim that Pi performance has already been measured.
 
@@ -22,6 +24,7 @@ The Pi's reserved LAN address is **`192.168.1.2`** and its chosen application ho
 | `HTTPS_PORT` | `8443` | Published app port; change if already occupied |
 | `ENERGY_ROOT` | `/opt/home-energy` | Local storage on the Pi, preferably SSD-backed |
 | `ENERGY_IMAGE` | `home-energy-monitor:pi-<commit>` | Use the exact tag printed by the build below |
+| `ENERGY_PULL_POLICY` | `never` for local builds; `missing` for GHCR | Controls whether Docker may download the selected image |
 | Portainer stack name | `home-energy` | Used by the operational examples |
 
 With the chosen hostname, the address is **`https://home.energy:8443`**. You can also use **`https://192.168.1.2:8443`** when the certificate includes that IP address. Portainer's own HTTPS certificate does not automatically cover this separate application.
@@ -223,13 +226,14 @@ This retains the Octopus key, selected meter, polling configuration and readings
 
 ```dotenv
 ENERGY_IMAGE=home-energy-monitor:pi-REPLACE_WITH_BUILD_COMMIT
+ENERGY_PULL_POLICY=never
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
 HTTPS_PORT=8443
 ```
 
-5. Leave image re-pulling and automatic Git/webhook updates disabled. This plan uses a locally built image, not a registry-published image.
+5. For the local-build fallback leave image re-pulling disabled and use `ENERGY_PULL_POLICY=never`. For GHCR use its published reference and `ENERGY_PULL_POLICY=missing`, configuring private registry access first. Keep automatic Git/webhook updates disabled for manual deployments.
 6. Click **Deploy the stack** and inspect the container logs and health status.
 
 The YAML derives trusted Host/Origin values from the hostname, IP and port, so they remain consistent. It mounts the password and certificate files read-only rather than depending on Swarm secrets or relative paths. **Do not put your Octopus API key, dashboard password or CA private key into the stack YAML or Portainer variables.** Polling interval, account/meter selection and timezone are application settings, not invented container environment variables.
@@ -277,7 +281,7 @@ docker run --rm --network none --user 10001:10001 \
 
 Restart the existing container in Portainer afterward. The command refuses to overwrite a backup. For recovery, restore only while stopped and revoke restored sessions with `password-reset` before serving the application again.
 
-For an upgrade, build a **new versioned ARM64 image**, take a backup, change only `ENERGY_IMAGE` in Portainer and update/recreate the stack without re-pulling. Preserve the data/secret mounts. Keep the prior image and its compatible backup until the upgrade is accepted; older images refuse newer database schemas, so rollback can require restoring the matching backup rather than simply choosing the old image.
+For an upgrade, select a new verified GHCR digest (or build a new local ARM64 tag), take a backup and change `ENERGY_IMAGE` in Portainer. Use `ENERGY_PULL_POLICY=missing` for GHCR or `never` for local images, then update/recreate the same stack. Preserve the data/secret mounts. Keep the prior image and its compatible backup until the upgrade is accepted; older images refuse newer database schemas, so rollback can require restoring the matching backup rather than simply choosing the old image.
 
 Do not delete the bind-mounted data directory when removing/recreating a stack. See [operations](operations.md) for recovery and storage details.
 
