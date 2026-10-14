@@ -23,11 +23,21 @@ flowchart LR
 
 The collector retrieves an overlapping `TEN_SECONDS` window at a default 45-second interval. It validates native timestamps/units and idempotently upserts every returned reading, including corrections. Equivalent timestamp offsets normalize to one UTC key. Config revisions fence off in-flight results after device/key/toggle changes.
 
-Raw changes mark affected five-minute buckets dirty, including the maximum supported adjacent-segment range. Maintenance atomically rebuilds each bucket's coverage, energy, sampled peak and three threshold aggregates. Derived rollups can be regenerated; raw readings are never automatically deleted.
+Raw changes mark affected retained five-minute buckets dirty, including the maximum
+supported adjacent-segment range. Maintenance atomically rebuilds coverage, energy,
+sampled peak and three threshold aggregates. Transactional retention replaces old
+raw readings with durable five-minute summaries, then local-day archives before
+eventual expiry. Archived summaries are not rebuildable after their source expires.
+Persistent per-meter cursors drive rate-governed historical recovery independently
+of dashboard sessions. See [storage management](storage-management.md).
 
 One writer lock serializes configuration, ingestion and maintenance. Two fixed read connections serve consistent snapshots. WAL allows concurrent readers/one writer, not unlimited writers. Query deadlines/cancellation interrupt SQLite work before returning a connection to its pool.
 
-Historical queries stream indexed rollups and recompute exact raw boundary/dirty fragments. One-minute views use a bounded raw window. Each response contains at most 2,000 buckets. A large dirty rebuild returns an explicit retryable state rather than serving stale cached metrics.
+Historical queries stream indexed summaries and recompute exact raw boundary/dirty
+fragments only where raw data remains. Older endpoints expand to retained boundaries
+with explicit warnings. One-minute views use a bounded raw window. Each response
+contains at most 4,000 buckets. A large dirty rebuild returns an explicit retryable
+state rather than serving stale cached metrics.
 
 SSE sends complete state snapshots. Each subscriber has one replaceable pending state; reconnects receive current state, not a durable event replay. The browser refetches history separately. Heartbeats and session checks run even without new readings.
 
@@ -54,4 +64,7 @@ There is one administrator identity, configured by `APP_ADMIN_USERNAME` (default
 
 Keys are stored only in the private database. JWTs remain in process memory and refresh single-flight. GraphQL HTTP 200 errors are classified alongside HTTP 401/429/5xx. Failed or partial upstream responses are never treated as healthy collection. Retry timing is shared with connectivity tests.
 
-The UI reports stream connectivity separately from collector health and native-reading freshness. File/database errors are explicit; no automatic corrupt-database replacement or raw-data deletion is attempted.
+The UI reports stream connectivity separately from collector health and native-reading
+freshness. File/database errors are explicit; no automatic corrupt-database replacement
+or unsummarized-data deletion is attempted. Shipped stacks require bounded data
+filesystems; ingestion checks total sidecar usage, reusable pages and free space.

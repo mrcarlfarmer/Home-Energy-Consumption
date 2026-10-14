@@ -1,4 +1,4 @@
-import { api, ApiError, authenticationRequired, Config, Device, History, session, Snapshot, Summary } from "./api";
+import { api, ApiError, authenticationRequired, Config, Device, History, session, Snapshot, StorageStatus, Summary } from "./api";
 import { DemandChart } from "./charts";
 import "./styles.css";
 
@@ -140,13 +140,16 @@ async function refresh(): Promise<void> {
       : new Date(element<HTMLInputElement>("from").value);
     const query = new URLSearchParams({ from: start.toISOString(), to: end.toISOString(), device_id: selected });
     text("analysis-status", "Calculating observed demand...");
-    const summary = await api<Summary>(`/api/analytics/summary?${query}&timezone=${encodeURIComponent(config.display_timezone)}`, undefined, controller.signal);
-    const history = await api<History>(`/api/analytics/history?${query}&interval=auto&max_points=1500`, undefined, controller.signal);
+    const storage = await api<StorageStatus>(`/api/storage?device_id=${encodeURIComponent(selected)}`, undefined, controller.signal);
+    const archived = storage.retention && start.getTime() * 1000 < storage.retention.five_before_us;
+    const timezone = archived ? storage.retention?.archive_timezone ?? config.display_timezone : config.display_timezone;
+    const summary = await api<Summary>(`/api/analytics/summary?${query}&timezone=${encodeURIComponent(timezone)}`, undefined, controller.signal);
+    const history = await api<History>(`/api/analytics/history?${query}&interval=auto&max_points=${archived ? 4000 : 1500}`, undefined, controller.signal);
     if (current !== generation || controller.signal.aborted) return;
     text("coverage", `${number(summary.coverage_pct)}%`);
     text("energy", `${number(summary.import_energy_kwh)} kWh`);
     text("peak", summary.sampled_peak_w === null ? "Unavailable" : `${number(summary.sampled_peak_w / 1000)} kW`);
-    text("analysis-status", `${number(summary.observed_seconds / 3600)} observed hours of ${number(summary.requested_seconds / 3600)}. Chart buckets: ${history.interval_seconds / 60} min. Calendar days: ${config.display_timezone}.`);
+    text("analysis-status", `${number(summary.observed_seconds / 3600)} observed hours of ${number(summary.requested_seconds / 3600)}. Chart buckets: ${history.interval_seconds / 60} min. Calendar days: ${timezone}. Range: ${new Date(summary.from).toLocaleString()} - ${new Date(summary.to).toLocaleString()}. Retention: raw ${storage.policy.raw_days} days, five-minute ${storage.policy.five_minute_days} days, daily ${storage.policy.daily_days} days. ${[...new Set([...summary.warnings, ...history.warnings])].join(". ")}`);
     const thresholdBody = element<HTMLTableSectionElement>("thresholds");
     thresholdBody.replaceChildren();
     for (const value of summary.thresholds) {
@@ -194,9 +197,18 @@ function connect(): void {
       element("collector-health").className = h.telemetry_state === "fresh" && h.polling_state === "running" && h.storage_state === "ok" ? "healthy" : "warning";
       text("upstream-health", [
         h.last_success_at ? `API contact: ${new Date(h.last_success_at).toLocaleTimeString()}` : "No successful API contact",
+        h.last_attempt_at ? `Last attempt: ${new Date(h.last_attempt_at).toLocaleTimeString()}` : "",
+        h.last_stored_at ? `Last write: ${new Date(h.last_stored_at).toLocaleTimeString()}` : "",
         h.error_code ?? "", h.next_attempt_at ? `Next attempt: ${new Date(h.next_attempt_at).toLocaleTimeString()}` : "",
-        h.recovery_incomplete ? "Older outage gaps could not be recovered." : "",
-        h.low_disk ? "Low disk space. Raw history is retained; free space or extend storage." : "",
+        h.recovery_pending ? `Recovering history: ${h.recovery_cursor_at ?? "pending"} to ${h.recovery_target_at ?? "pending"}; live and recovery requests alternate.` : "",
+        h.recovery_error ? `Historical recovery paused: ${h.recovery_error}. Live collection continues; save settings or test saved connectivity to retry.` : "",
+        h.recovery_gap_count ? `${h.recovery_gap_count} historical windows have missing or unavailable samples.` : "",
+        h.storage_paused ? "Collection paused: storage limit or free-space reserve reached." : "",
+        h.database_bytes != null ? `Storage: ${number(h.database_bytes / 1048576)} / ${number(h.storage_budget_bytes / 1048576)} MiB` : "",
+        h.disk_free_bytes != null ? `Disk free: ${number(h.disk_free_bytes / 1048576)} MiB` : "",
+        h.low_disk ? "Low disk space. Free space or extend storage." : "",
+        h.maintenance_error ? `Maintenance error: ${h.maintenance_error}` : "",
+        h.last_maintenance_at ? `Maintenance: ${new Date(h.last_maintenance_at).toLocaleString()}` : "",
       ].filter(Boolean).join(" | "));
       if (snapshot.device_id !== config.active_device_id) {
         void api<Config>("/api/config").then(value => { config = value; fillSettings(); return refresh(); }).catch(showError);

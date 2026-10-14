@@ -1,5 +1,9 @@
 # Home electricity monitoring: detailed implementation plan and technical specification
 
+This is the original historical specification. The later bounded-storage,
+retention and recovery design in [storage management](storage-management.md)
+supersedes its indefinite raw retention and earlier request/output limits.
+
 ## 1. Outcome, scope and decisions
 
 Build a lightweight, self-hosted electricity monitoring application for Raspberry Pi OS 64-bit/Linux ARM64. One Docker container runs one Python process: FastAPI serves an embedded static dashboard and a supervised asynchronous poller retrieves Octopus Home Mini telemetry through Kraken. SQLite holds configuration, meter readings and rebuildable analytical rollups.

@@ -16,14 +16,19 @@ For a local-build fallback, use the [native Pi build instructions](portainer-ins
 
 ## 2. Prepare storage
 
-Run on the Pi over SSH:
+First follow [bounded storage preparation and migration](storage-management.md).
+The current stack refuses ordinary data directories on a larger host filesystem.
+For a **fresh** installation at the example path, run on the Pi over SSH:
 
 ```sh
-sudo install -d -m 755 /opt/home-energy
-sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data /opt/home-energy/secrets
+sudo sh deploy/prepare-storage.sh /opt/home-energy
+sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/secrets
 ```
 
-Retain existing data rather than overwriting it. The container uses UID/GID `10001:10001`; do not solve permission issues by making the private database world-readable.
+For existing installations use a new storage root and migrate the consistent
+database backup and secrets as described in that guide; adjust `ENERGY_ROOT`.
+Retain existing data rather than overwriting it. The container uses UID/GID
+`10001:10001`; do not solve permission issues by making the private database world-readable.
 
 Use local storage, preferably an SSD, not NFS/SMB for SQLite WAL. Ensure any storage mount is available before Docker starts. These paths must exist on the Pi's Docker endpoint, not just on the Portainer server.
 

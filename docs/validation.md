@@ -9,6 +9,29 @@
 - Chromium tests use the real FastAPI/SSE server with synthetic telemetry: login, live state, chart rendering, settings, presets, missing data and logout.
 - CI checks Python formatting/lint/types/tests, the TypeScript/frontend build, Chromium scenarios and AMD64/ARM64 image builds.
 
+## Continuous collection and bounded retention update (2026-10-14)
+
+Local verification passed 67 backend tests, strict mypy, Ruff lint/format, the
+production TypeScript/frontend build and eight Chromium scenarios. New coverage
+includes collection before login and after logout, persistent recovery cursors,
+revision fencing, historical-only failure isolation, raw-to-summary equivalence,
+23-/25-hour daily archives, expiry, transactional rollback before deletion,
+sidecar accounting, SQLite page limits, low-free-space pauses, and pause/resume
+with a real reader-pinned WAL.
+
+All three Compose configurations and the Linux storage helper's shell syntax were
+checked. The helper's privileged filesystem creation/mount and a quota-exhaustion
+exercise on the actual Pi remain deployment acceptance gates; they were not run
+on the shared Windows host. The new version has not been deployed to the household
+collector. Follow [storage migration](storage-management.md) before upgrading.
+
+Household diagnostic output supplied on this date shows successful `TEN_SECONDS`
+queries for two-minute windows roughly 30 minutes, one hour, six hours and 24 hours
+old. One response returned a ten-second bucket just before the requested start.
+This verifies observed historical availability and motivates overlap handling; it
+does not establish maximum lookback, maximum request span, or account rate limits.
+Seven-day and larger-window results have not been supplied.
+
 ## Authentication and publication update (2026-10-14)
 
 The username/password update (`779f26b`) passed 54 backend tests, Ruff, strict mypy, the production frontend build and seven Chromium scenarios. Coverage includes custom usernames, missing/wrong credentials, no session creation for invalid identity, signed-out API/SSE/OpenAPI access, CSRF, logout and the explicit password-free opt-out.

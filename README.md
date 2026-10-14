@@ -9,7 +9,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - 24-hour, 7-day, 30-day and custom history, sampled peaks and trailing 15-minute demand.
 - Inverter comparisons at 3.68, 5 and 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
-- Permanent device-scoped raw history, rebuildable five-minute analytics, gap/coverage reporting and local-calendar/DST handling.
+- Always-on collection, restart-safe gap recovery, bounded storage, 30-day raw / 396-day five-minute / ten-year daily history, and gap/coverage reporting with local-calendar/DST handling.
 - ARM64/AMD64 multi-stage builds, hash-locked dependencies and a 140 MiB container memory guardrail.
 
 **Measurement limitations:** this is sampled grid import, not necessarily total household demand when solar/batteries supply power. Missing telemetry is unknown, not zero. Results are estimates, not billing reconciliation, an inverter installation design or a G98/G99 compliance decision.
@@ -21,6 +21,11 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 **Using Portainer?** Both stacks now protect the entire dashboard with a username and password. Use the [certificate-free HTTP guide](docs/portainer-http-installation.md) or [HTTPS guide](docs/portainer-installation.md). Default username: `admin`; passwords are supplied through a private runtime file. HTTP credentials remain unencrypted, so use HTTPS for transport security.
 
 For the default HTTPS deployment with the Compose CLI:
+
+**Storage upgrade requirement:** prepare a dedicated bounded data filesystem before
+deploying this version. The shipped stacks refuse unbounded data directories.
+Follow [storage management and migration](docs/storage-management.md), including
+setting `ENERGY_DATA_DIRECTORY` for Compose.
 
 1. Install Docker Engine and the Compose plugin on a **64-bit** OS.
 2. Follow [deployment](docs/deployment.md) to create an administrator password file and a locally trusted HTTPS certificate. Never put real secrets in Git.
@@ -40,6 +45,7 @@ The device ID is the **electricity smart meter EUI-64**, not the Home Mini seria
 - [API contracts](docs/api.md)
 - [Analytics methodology](docs/analytics-methodology.md)
 - [Operations, backup and recovery](docs/operations.md)
+- [Storage limits, retention and gap recovery](docs/storage-management.md)
 - [Validation and outstanding release gates](docs/validation.md)
 - [Original detailed implementation plan](docs/implementation-plan.md)
 

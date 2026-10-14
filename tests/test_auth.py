@@ -183,7 +183,7 @@ async def test_session_migration_preserves_existing_database(tmp_path: Path) -> 
         assert await store.password_hash() == encoded
         assert await store.load_sessions() == []
         async with store.read() as conn:
-            assert (await one(conn, "PRAGMA user_version"))[0] == 2
+            assert (await one(conn, "PRAGMA user_version"))[0] == 3
             assert (await one(conn, "PRAGMA integrity_check"))[0] == "ok"
     finally:
         await store.close()

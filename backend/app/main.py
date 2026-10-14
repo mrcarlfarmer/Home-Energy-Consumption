@@ -6,6 +6,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Annotated, Any
 from zoneinfo import ZoneInfoNotFoundError
 
@@ -451,6 +452,26 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
     @app.get("/api/openapi.json")
     async def openapi(session: SessionDep) -> dict[str, Any]:
         return app.openapi()
+
+    @app.get("/api/storage")
+    async def storage_status(session: SessionDep, device_id: str | None = None) -> dict[str, Any]:
+        config = await store.config()
+        device = device_id or config["active_device_id"]
+        async with store.read() as conn:
+            retained = await store.retention(conn, device) if device else None
+            async with conn.execute(
+                "SELECT start_us,end_us,reason FROM recovery_gaps WHERE device_id=? "
+                "ORDER BY start_us DESC LIMIT 100",
+                (device,),
+            ) as cur:
+                gaps = [dict(row) for row in await cur.fetchall()]
+        return {
+            "policy": asdict(store.policy),
+            "capacity": await store.capacity(),
+            "retention": retained,
+            "recovery": await store.recovery_health(device),
+            "gaps": gaps,
+        }
 
     @app.get("/healthz")
     async def health() -> dict[str, bool]:

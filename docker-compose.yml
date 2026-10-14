@@ -7,13 +7,24 @@ services:
       - "${LAN_BIND_ADDRESS:?Set the Pi LAN address}:8443:8443"
     environment:
       APP_DATABASE_PATH: /data/energy.sqlite3
+      APP_REQUIRE_BOUNDED_FILESYSTEM: "true"
+      APP_STORAGE_BUDGET_BYTES: "${APP_STORAGE_BUDGET_BYTES:-2147483648}"
+      APP_STORAGE_RESERVE_BYTES: "${APP_STORAGE_RESERVE_BYTES:-268435456}"
+      APP_RAW_RETENTION_DAYS: "${APP_RAW_RETENTION_DAYS:-30}"
+      APP_5M_RETENTION_DAYS: "${APP_5M_RETENTION_DAYS:-396}"
+      APP_DAILY_RETENTION_DAYS: "${APP_DAILY_RETENTION_DAYS:-3653}"
+      APP_RECOVERY_LOOKBACK_DAYS: "${APP_RECOVERY_LOOKBACK_DAYS:-1}"
       APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       APP_TLS_CERT_FILE: /run/secrets/tls_certificate
       APP_TLS_KEY_FILE: /run/secrets/tls_private_key
       APP_ALLOWED_HOSTS: "${APP_ALLOWED_HOSTS:?Set trusted LAN hostnames}"
       APP_ALLOWED_ORIGINS: "${APP_ALLOWED_ORIGINS:?Set HTTPS origins}"
     volumes:
-      - energy_data:/data
+      - type: bind
+        source: "${ENERGY_DATA_DIRECTORY:?Set the mounted bounded data filesystem path}"
+        target: /data
+        bind:
+          create_host_path: false
     secrets:
       - admin_password
       - tls_certificate
@@ -37,9 +48,6 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
-
-volumes:
-  energy_data:
 
 secrets:
   admin_password:
