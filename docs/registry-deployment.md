@@ -80,6 +80,43 @@ Both Portainer stacks set `container_name: home-energy`, rather than Compose's g
 
 **HTTP/no-login remains a trusted-LAN-only deployment:** anyone who can reach it can read data/change settings, and browser traffic is unencrypted. A private GitHub repository/image does not add dashboard authentication or encryption. Do not publicly expose Portainer or the app.
 
+### Deploy the stack from the Git repository
+
+The same Compose files work with Portainer's **Git repository** option; no `build:` section, relative data mounts or additional YAML file is needed. Portainer downloads the stack definition from Git and the application image from GHCR separately. The repository URL/branch/path are Portainer settings, not Compose properties.
+
+For a new stack select the Pi's Docker Standalone environment, then **Stacks > Add stack > Git repository**, with name `home-energy`. Depending on Portainer version, enter the repository fields directly or first create/select a Git source under App Delivery:
+
+| Portainer field | Value |
+|---|---|
+| Repository URL | `https://github.com/mrcarlfarmer/Home-Energy-Consumption.git` |
+| Repository reference | `refs/heads/main` (or select the `main` branch) |
+| Compose path | `deploy/portainer-http-stack.yml` |
+| Additional Compose files | None |
+| GitOps/automatic updates | Disabled initially |
+
+For the protected HTTPS alternative, use `deploy/portainer-stack.yml` instead and prepare its private files. Compose paths use forward slashes because they are repository-relative Portainer inputs.
+
+Set the deployment variables in Portainer's **Environment variables** section, not GitHub Actions secrets:
+
+```dotenv
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption:latest
+ENERGY_PULL_POLICY=always
+ENERGY_ROOT=/opt/home-energy
+PI_LAN_IP=192.168.1.2
+ENERGY_HOSTNAME=home.energy
+HTTP_PORT=8080
+```
+
+For exact-version deployment, use a published digest and `ENERGY_PULL_POLICY=missing`. Keep the data directory on the Pi, outside Portainer's Git checkout. Deploy and verify container `home-energy` is healthy and existing settings/history remain present.
+
+**Migrating an existing Web editor stack:** do not deploy another stack alongside it. First take a consistent database backup, record its variables and image digest, and save its current YAML. If your Portainer version offers a supported source-change option, use it for the existing stack. Otherwise remove the existing stack/its container in Portainer and recreate `home-energy` using the Git fields above, with the exact same `/opt/home-energy/data` bind mount. This causes a brief collection outage. Do not delete the host data directory, select volume/data removal, or start a second collector. The bind-mounted database survives container/stack recreation; the Git checkout is not where it is stored.
+
+To update a Git-managed stack, wait for the GitHub publication run to finish, then select **Stacks > home-energy > Pull and redeploy**, enabling **Re-pull image and redeploy**. This fetches both the new YAML and current image. Edit Compose changes in the repository rather than keeping a separate pasted copy.
+
+Leave automatic GitOps polling/webhooks off for now: a main commit may reach Portainer before its verified image publication finishes, and changes to `latest` alone are not a reliable Git-change trigger. Repository-backed configuration does not make image deployment automatic.
+
+If you make the source repository private, configure read-only Git credentials in Portainer's Git source/repository authentication settings (for example a fine-grained PAT with Contents read access to this repository). These are separate from GHCR's classic `read:packages` registry token. Neither token belongs in the stack YAML; the Octopus key remains runtime configuration, not a Git credential.
+
 ### Use latest for simpler manual updates
 
 Instead of changing the image digest on every upgrade, set:

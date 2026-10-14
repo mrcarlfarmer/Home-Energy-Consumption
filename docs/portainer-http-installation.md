@@ -58,8 +58,8 @@ Use `home.energy` specifically for this app. Cookies are host-scoped, not isolat
 ## 4. Create or update the Portainer stack
 
 1. Select the Pi's Docker Standalone environment.
-2. Choose **Stacks > Add stack**, name it `home-energy`, and use **Web editor**. If this stack already exists, back up its database and edit that same stack rather than starting a second collector.
-3. Paste [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml), not the HTTPS stack.
+2. Choose **Stacks > Add stack**, name it `home-energy`, and select **Git repository**. Use repository URL `https://github.com/mrcarlfarmer/Home-Energy-Consumption.git`, reference `refs/heads/main`, Compose path `deploy/portainer-http-stack.yml`, and leave GitOps updates disabled. Newer Portainer versions may ask you to create/select a Git source first.
+3. Follow the [Git-backed stack setup and existing-stack migration guidance](registry-deployment.md#deploy-the-stack-from-the-git-repository). If this stack already exists, back up its database and migrate it rather than starting a second collector. Web editor remains an alternative: paste [the HTTP YAML](../deploy/portainer-http-stack.yml), not the HTTPS stack.
 4. Set these variables, replacing the digest placeholder with the reference from the successful publication:
 
 ```dotenv
@@ -75,6 +75,8 @@ HTTP_PORT=8080
 6. Deploy/update the stack and confirm the container becomes healthy.
 
 For simpler manual upgrades, use `ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption:latest` and `ENERGY_PULL_POLICY=always`, then choose **Re-pull image and redeploy** when updating. The verified current-main build updates `latest` automatically, but the running Pi does not update until redeployed. See [latest and rollback guidance](registry-deployment.md#use-latest-for-simpler-manual-updates).
+
+For Git-managed stacks use **Pull and redeploy** after the publication workflow completes, enabling image re-pulling. The repository stores the stack definition; your variables stay in Portainer and your database stays on the Pi.
 
 The only host mount is the private data directory. There are no password/certificate mounts or TLS variables. Do not put the Octopus API key in the stack or its environment-variable form.
 
