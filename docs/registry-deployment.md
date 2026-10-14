@@ -7,12 +7,12 @@ GitHub Actions builds and publishes the application so the Pi only downloads an 
 The `Verify` workflow runs backend checks, browser scenarios and an AMD64/ARM64 container build. Only after **both verification jobs succeed**, a push to `main` publishes to:
 
 ```text
-ghcr.io/mrcarlfarmer/home-energy-consumption:sha-<full-40-character-commit>
+ghcr.io/mrcarlfarmer/home-energy-consumption-private:sha-<full-40-character-commit>
 ```
 
 Pull requests and other branches never publish. You can also run `Verify` manually from Actions on `main`; other manually selected branches only validate. There are no release-tag or `latest` aliases: each deployment selects a verified commit explicitly, rather than silently following a moving image tag.
 
-The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
+The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. After publishing, a check fails the job if the image can be downloaded anonymously. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
 
 ## Secret boundaries
 
@@ -31,17 +31,19 @@ If a future workflow genuinely needs an external API credential, add it through 
 
 ## Registry visibility and access
 
-This workflow does not change either repository or package visibility. Check the package's actual visibility in GitHub before relying on private access; do not infer it from source repository visibility or assume a publishing run changes it. If an existing package is public, newly published versions are publicly downloadable too.
+The workflow now publishes to the separate `home-energy-consumption-private` package, not the earlier publicly pullable `home-energy-consumption` package. New GHCR packages default to private; the workflow does not make packages public or change repository visibility. Check actual package visibility before relying on private access.
+
+**GitHub does not allow changing a public package back to private.** The original public package's images contain no runtime credentials, but they cannot be recalled. Future builds use the new package name so making the source repository private does not leave future images publishing to the old public package. Do not change the new package to public if you want to preserve this boundary.
 
 **Private images (recommended if you plan to make the repository private):**
 
 1. In GitHub Packages, confirm the package is linked to this repository and its Actions access allows this repository to publish. If an existing package gives `permission_denied: write_package`, fix its package access rather than adding a broad personal token.
-   Set package visibility to **Private** in its package settings if required. This is a separate owner operation, not performed by the publication workflow; repository privacy alone is insufficient.
+   Confirm visibility is **Private**. If a package has already been made public, use a new package name rather than attempting to make it private again.
 2. Create a **classic PAT** with `read:packages`, owned by an account allowed to read the package. Authorize SSO if required. Do not use a fine-grained PAT for GHCR package authentication or grant write/delete scopes to Portainer.
 3. In Portainer, open **Registries > Add registry > Custom registry**. Set name `GitHub Container Registry`, URL `ghcr.io`, enable authentication and supply the GitHub username and PAT as the password.
 4. Ensure the Portainer user deploying the stack has access to that registry. Store the PAT there, not in YAML, Git, the image or the app's settings. Rotate it before expiry.
 
-Public images can be pulled anonymously, but public package visibility is a separate, deliberate GitHub setting. Making the repository private later does not guarantee a previously public package becomes private. Review repository and package visibility independently; already downloaded images cannot be recalled.
+Public images can be pulled anonymously, but public package visibility is a separate, deliberate GitHub setting and cannot be reversed. Making the repository private later does not make a previously public package private. Review repository and package visibility independently; already downloaded images cannot be recalled.
 
 ## Install on the Pi
 
@@ -59,7 +61,7 @@ sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data
 3. Set the variables below, replacing the digest placeholder with the published reference:
 
 ```dotenv
-ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption@sha256:REPLACE_WITH_PUBLISHED_DIGEST
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption-private@sha256:REPLACE_WITH_PUBLISHED_DIGEST
 ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
