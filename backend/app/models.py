@@ -142,4 +142,5 @@ class TestConfig(BaseModel):
 
 class Login(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=64)
     password: SecretStr = Field(min_length=1, max_length=1024)

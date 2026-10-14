@@ -4,13 +4,15 @@ The application exposes its current generated schema at `GET /api/openapi.json`,
 
 ## Authentication
 
+Both supplied Portainer stacks enable login for the whole dashboard/API. `APP_ADMIN_USERNAME` defaults to `admin` and accepts 1-64 characters without outer whitespace. Login requires both username and password. Incorrect credentials share the same response and password verification work; invalid usernames do not create sessions. The username is a deployment setting, not a second user account system.
+
 `APP_AUTH_REQUIRED` defaults to `true` and accepts only `true` or `false`. It is a deployment-only setting. Explicit `false` makes configuration, analytics, OpenAPI and SSE accessible without login; **anyone who can reach the app can read data and change settings**. It creates no password hash or authentication cookie, skips password bootstrap and the password watcher, and revokes existing persisted sessions on startup without deleting the saved password hash or application data.
 
 In password-free mode, `GET /api/auth/session` returns `authenticated:false`, `authentication_required:false` and a process-local CSRF token. The frontend opens the dashboard directly and hides Sign out. Send the token as `X-CSRF-Token` with mutations; trusted Origin/Host checks, request limits, redaction and upstream authentication still apply. The CSRF token is not an authentication credential and is available to anyone who can reach this endpoint. It rotates on restart; reload the page before retrying a stale-token rejection. Login and logout return 409 `authentication_disabled`.
 
 The remaining authentication/session behavior below applies when login is enabled. Successful login/session responses include `authentication_required:true`.
 
-`POST /api/auth/login` accepts `{"password":"..."}` and returns a CSRF token while setting an HttpOnly, SameSite=Strict session cookie. HTTPS is the default and adds the Secure flag and HSTS. Explicit `APP_TRANSPORT=http` omits those HTTPS-only protections; the browser connection is then unencrypted. The request must have a configured `Origin` matching the selected transport. Default ports 80/443 are normalized to the browser's port-free Origin form.
+`POST /api/auth/login` accepts `{"username":"admin","password":"..."}` and returns a CSRF token while setting an HttpOnly, SameSite=Strict session cookie. HTTPS is the default and adds the Secure flag and HSTS. Explicit `APP_TRANSPORT=http` omits those HTTPS-only protections; the browser connection is then unencrypted. The request must have a configured `Origin` matching the selected transport. Default ports 80/443 are normalized to the browser's port-free Origin form.
 
 `GET /api/auth/session` returns the current CSRF token. Send it as `X-CSRF-Token` with all subsequent mutations. `POST /api/auth/logout` revokes the session; associated SSE streams close at their next session check (within 15 seconds).
 

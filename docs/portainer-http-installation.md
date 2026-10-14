@@ -1,10 +1,10 @@
-# No-login, certificate-free Portainer installation (trusted LAN only)
+# Username-protected, certificate-free Portainer installation (trusted LAN only)
 
-Use [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml) for **HTTP without certificates or a dashboard login**. The dashboard opens directly, including Settings. No password file is needed. CSRF and trusted Origin/Host checks remain enabled, and saved API keys are still redacted from responses.
+Use [deploy/portainer-http-stack.yml](../deploy/portainer-http-stack.yml) for **HTTP without certificates, with username/password protection for the entire dashboard and API**. The default username is `admin`; a private password file is required. CSRF and trusted Origin/Host checks remain enabled, and saved API keys are redacted.
 
-**Tradeoff:** anyone who can reach this service can view electricity data, change settings and control collection. HTTP also leaves telemetry and API-key entry unencrypted, so intercepted traffic can be observed or modified. CSRF/Host/Origin checks do not authenticate people on your network. Use this only on a trusted LAN with no router port forwarding or public/untrusted-network exposure. The Pi's connection to Octopus still uses verified HTTPS and its API credentials.
+**Tradeoff:** login prevents unauthenticated access, but HTTP leaves usernames, passwords, session cookies, telemetry and API-key entry unencrypted. Intercepted traffic can be observed or modified. Use this only on a trusted LAN with no public exposure; HTTPS remains the secure transport alternative. The Pi's Kraken connection still uses verified HTTPS.
 
-HTTPS and password authentication remain the application's defaults. This separate stack explicitly sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`. These are deployment settings, not switches exposed to unauthenticated dashboard users. "Trusted LAN" describes the deployment boundary, not an automatic guarantee made by the application.
+Both Portainer stacks now require authentication. The HTTP stack explicitly sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=true`. These are deployment settings, not dashboard switches.
 
 ## 1. Select a published image
 
@@ -20,16 +20,27 @@ Run on the Pi over SSH:
 
 ```sh
 sudo install -d -m 755 /opt/home-energy
-sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data
+sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data /opt/home-energy/secrets
 ```
 
 Retain existing data rather than overwriting it. The container uses UID/GID `10001:10001`; do not solve permission issues by making the private database world-readable.
 
 Use local storage, preferably an SSD, not NFS/SMB for SQLite WAL. Ensure any storage mount is available before Docker starts. These paths must exist on the Pi's Docker endpoint, not just on the Portainer server.
 
-**No password file, mkcert, CA installation, certificate or TLS private key is needed.** If these files already exist, you may retain them privately for rollback; this stack does not mount or read them.
+No certificates are needed, but create a private password file before updating the stack. On the Pi in Bash:
 
-For a fresh installation, leave the data directory empty. To keep your current PC settings/history, first run `install -d -m 700 "$HOME/energy-install"` on the Pi to create the private transfer staging directory. Then follow the backup, transfer and database-install steps in [the data migration procedure](portainer-installation.md#5-choose-a-fresh-installation-or-migrate-the-current-data), skipping certificate and password-reset steps. Transfer only into a stopped, empty destination. Password-free startup automatically revokes copied authenticated sessions without changing the saved password hash, API key or history. Do not run both collectors against the same meter simultaneously.
+```sh
+IFS= read -r -s -p "Dashboard password (12+ characters): " PASSWORD
+printf '\n'
+printf '%s\n' "$PASSWORD" | sudo tee /opt/home-energy/secrets/admin-password >/dev/null
+unset PASSWORD
+sudo chown 10001:10001 /opt/home-energy/secrets/admin-password
+sudo chmod 400 /opt/home-energy/secrets/admin-password
+```
+
+For a fresh/password-free database this bootstraps the hash. If an old administrator hash already exists, the file does not replace it: use your previous password or reset it while the old password-free container is still running with `docker exec -it home-energy energy-admin password-reset`. That reset preserves telemetry/configuration. Do not put passwords in Portainer environment variables or Git.
+
+For a fresh installation leave the data directory empty. For migration follow [the database transfer procedure](portainer-installation.md#5-choose-a-fresh-installation-or-migrate-the-current-data), skipping certificates but retaining password reset to revoke copied sessions. Never overwrite existing data or run two collectors against it.
 
 ## 3. Choose the hostname and an available host port
 
@@ -68,6 +79,7 @@ ENERGY_PULL_POLICY=missing
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
+ENERGY_ADMIN_USERNAME=admin
 HTTP_PORT=8080
 ```
 
@@ -78,24 +90,24 @@ For simpler manual upgrades, use `ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-
 
 For Git-managed stacks use **Pull and redeploy** after the publication workflow completes, enabling image re-pulling. The repository stores the stack definition; your variables stay in Portainer and your database stays on the Pi.
 
-The only host mount is the private data directory. There are no password/certificate mounts or TLS variables. Do not put the Octopus API key in the stack or its environment-variable form.
+Host mounts are the private data directory and read-only administrator password file. There are no certificate mounts. Do not put the Octopus key or password into the stack variables.
 
 The stack retains the 140 MiB memory limit, no extra swap allowance, non-root user, read-only root filesystem, bounded logs and dropped capabilities. Keep capacity for the Pi OS, Docker, Portainer and other containers. Bind to the reserved LAN IP and use Docker-aware firewall/network restrictions; do not expose the published HTTP port on the internet.
 
 ## 5. Open the dashboard
 
-Open **`http://home.energy:8080`**, not `https://`. The dashboard opens without a login page or Sign out button. Enter or retain your Octopus settings, select the meter and enable polling. Confirm recent readings arrive and your existing history is present. Persistent notices identify both the unencrypted connection and disabled login.
+Open **`http://home.energy:8080`**, not `https://`. Sign in with `admin` (or `ENERGY_ADMIN_USERNAME`) and your password. All telemetry, history and settings require login. Existing Octopus settings/history are retained. A persistent warning identifies unencrypted HTTP.
 
-Password-free mode creates no authentication cookies or password hashes. It has no login expiry. The browser obtains a CSRF token automatically; mutations without that token or a trusted Origin are still rejected. This token changes when the app restarts: reload the page if a settings change asks you to refresh and retry. HSTS is not sent in HTTP mode.
+Sessions survive restarts and expire 12 hours after sign-in. Cookies are HttpOnly/SameSite=Strict but cannot be Secure in HTTP mode. Mutations require CSRF and a trusted Origin. HSTS is not sent over HTTP.
 
-If you previously used HTTPS at this hostname, the browser may remember HSTS and automatically upgrade HTTP requests to HTTPS. Remove only this application's remembered HSTS/site state using the browser's controls, or use a fresh dedicated hostname with matching DNS/Portainer settings. Old login cookies are ignored in password-free mode. Do not disable browser security globally.
+If a browser remembers HTTPS/HSTS for this hostname, use `http://192.168.1.2:8080` or remove only this hostname's remembered policy. Do not disable browser security globally.
 
 The health probe uses loopback HTTP in this mode; it does not read certificates or disable validation for any HTTPS connection.
 
 ## Backups and later changes
 
-Use the [backup and upgrade procedures](portainer-installation.md#8-backups-upgrades-and-recovery) with the currently deployed image tag and unchanged data directory. Backups contain secrets and need private storage. Password-free startup revokes restored authenticated sessions automatically; when restoring directly into a password-protected deployment, reset the password to revoke restored sessions before serving it.
+Use the [backup and upgrade procedures](portainer-installation.md#8-backups-upgrades-and-recovery) with the current image and unchanged data directory. Backups contain secrets; reset the password to revoke restored sessions before serving restored data.
 
-To re-enable login, set `APP_AUTH_REQUIRED: "true"` (or remove it), mount a private bootstrap password file and configure `APP_ADMIN_PASSWORD_FILE` as in the [password setup](portainer-installation.md#4-create-the-bootstrap-password-file). Existing databases retain their old password hash; a fresh password-free database needs the bootstrap file on its first protected start. Use `energy-admin password-reset` if you need to change an existing password. Recreate the container and reload the browser. Previously revoked sessions do not become valid again, and ordinary protected sessions still have a fixed 12-hour lifetime.
+When upgrading a previously password-free stack, prepare the password file first, wait for image publication, then **Pull and redeploy** with image re-pulling. The username defaults to `admin` and is configured by `ENERGY_ADMIN_USERNAME`; it is not secret. Existing password hashes are retained. Username/password are mandatory in login requests; older browser clients must reload after upgrading.
 
 To return to HTTPS, obtain the certificate files and use the [HTTPS installation guide](portainer-installation.md) and original stack. Never simply change URL schemes without also changing the transport, trusted Origins, port mapping and mounts. A reverse-proxy deployment is a separate configuration; this HTTP mode does not automatically trust forwarded headers.

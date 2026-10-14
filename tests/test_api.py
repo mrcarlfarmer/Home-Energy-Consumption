@@ -31,7 +31,9 @@ async def test_login_config_redaction_csrf_and_bounds(tmp_path: Path) -> None:
         ) as client,
     ):
         assert (await client.get("/api/config")).status_code == 401
-        response = await client.post("/api/auth/login", json={"password": "a-long-test-password"})
+        response = await client.post(
+            "/api/auth/login", json={"username": "admin", "password": "a-long-test-password"}
+        )
         assert response.status_code == 200, response.text
         client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
         data = {
@@ -123,7 +125,9 @@ async def test_draft_connectivity_is_rate_limited_without_saving(tmp_path: Path)
             headers={"Origin": "http://testserver"},
         ) as client,
     ):
-        login = await client.post("/api/auth/login", json={"password": "fixture-password-only"})
+        login = await client.post(
+            "/api/auth/login", json={"username": "admin", "password": "fixture-password-only"}
+        )
         client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
         draft = {"account_number": "A-FIXTURE", "api_key": "never-saved"}
         first = await client.post("/api/config/test", json=draft)

@@ -49,13 +49,13 @@ Public images can be pulled anonymously, but public package visibility is a sepa
 
 ## Install on the Pi
 
-Use the [HTTP/no-login guide](portainer-http-installation.md) for the chosen LAN deployment, or the [protected HTTPS guide](portainer-installation.md) for certificate/password preparation. Keep DNS `home.energy -> 192.168.1.2`.
+Both stacks now require username/password authentication. Use the [HTTP guide](portainer-http-installation.md) to prepare its private password file before upgrading, or the [HTTPS guide](portainer-installation.md). Default username is `admin`, overridden with `ENERGY_ADMIN_USERNAME`; no password is stored in GitHub or image layers. Keep DNS `home.energy -> 192.168.1.2`.
 
-For the HTTP setup, the only required host directory is:
+For HTTP, prepare both directories and the password file described in its guide:
 
 ```sh
 sudo install -d -m 755 /opt/home-energy
-sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data
+sudo install -d -m 700 -o 10001 -g 10001 /opt/home-energy/data /opt/home-energy/secrets
 ```
 
 1. Open the successful `Verify` run in GitHub Actions and copy its **Exact Portainer image** from the Summary. Wait for publication to finish; a source commit existing does not mean its image exists.
@@ -78,7 +78,7 @@ For HTTPS use the original stack and `HTTPS_PORT=8443` instead, plus its existin
 
 Both Portainer stacks set `container_name: home-energy`, rather than Compose's generated `home-energy-energy-1`. For an existing Web editor stack, add this line under the `energy:` service and update the same stack; the container is recreated but the bind-mounted data stays intact. Do not rename it only in the Containers view, as the stack configuration should remain the source of truth. The fixed name permits only one such container on a Docker endpoint; do not deploy the HTTP and HTTPS alternatives simultaneously.
 
-**HTTP/no-login remains a trusted-LAN-only deployment:** anyone who can reach it can read data/change settings, and browser traffic is unencrypted. A private GitHub repository/image does not add dashboard authentication or encryption. Do not publicly expose Portainer or the app.
+**HTTP remains trusted-LAN-only:** login is required for the dashboard/API, but passwords and sessions travel unencrypted. A private registry does not provide transport encryption. Do not publicly expose Portainer or the app.
 
 ### Deploy the stack from the Git repository
 
@@ -104,6 +104,7 @@ ENERGY_PULL_POLICY=always
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
+ENERGY_ADMIN_USERNAME=admin
 HTTP_PORT=8080
 ```
 
@@ -136,7 +137,7 @@ Publishing is automated; deployment is intentionally manual. There are no intern
 
 Take a private consistent database backup using the [backup procedure](portainer-installation.md#8-backups-upgrades-and-recovery). For a one-off CLI backup, use the image currently running on the Pi; a private image must already be cached or the Pi's CLI needs its own registry login (Portainer credentials are not automatically shared with `docker login`).
 
-Record the old image digest. Change only `ENERGY_IMAGE` to a new successful run's digest, preserve the data mount and other variables, and update the same stack. Confirm health, telemetry and retained history. In password-free mode reload an open browser after restarting to refresh its CSRF token.
+Record the old image digest. Change only `ENERGY_IMAGE` to a new successful run's digest, preserve the data mount and other variables, and update the same stack. Confirm health, telemetry and retained history. Reload older browser clients after this username-login upgrade.
 
 Retain old image versions and compatible database backups. Reverting the reference is sufficient only when the database schema remains compatible; a schema-changing rollback may require restoring its matching backup while stopped. Never delete the data directory or run two app containers against it. Do not remove old GHCR versions that you still need for rollback.
 

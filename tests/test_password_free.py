@@ -114,7 +114,9 @@ async def test_password_free_api_keeps_csrf_origin_redaction_and_workers(tmp_pat
             assert result.status_code == 200, result.text
         assert (await client.get("/api/openapi.json")).status_code == 200
         assert (
-            await client.post("/api/auth/login", json={"password": "unused-password"})
+            await client.post(
+                "/api/auth/login", json={"username": "admin", "password": "unused-password"}
+            )
         ).status_code == 409
         assert (await client.post("/api/auth/logout", json={})).status_code == 409
         await asyncio.sleep(0.05)
@@ -177,7 +179,9 @@ async def test_reenabling_login_requires_bootstrap_for_a_password_free_database(
     ):
         assert (await client.get("/api/config")).status_code == 401
         assert (
-            await client.post("/api/auth/login", json={"password": password.read_text()})
+            await client.post(
+                "/api/auth/login", json={"username": "admin", "password": password.read_text()}
+            )
         ).status_code == 200
 
 
@@ -198,7 +202,9 @@ async def test_disabling_login_revokes_sessions_but_preserves_password_and_data(
             headers={"Origin": "http://testserver"},
         ) as client,
     ):
-        login = await client.post("/api/auth/login", json={"password": password.read_text()})
+        login = await client.post(
+            "/api/auth/login", json={"username": "admin", "password": password.read_text()}
+        )
         assert login.json()["authentication_required"]
         cookie = login.cookies[COOKIE]
         encoded = await first.state.store.password_hash()
@@ -232,7 +238,8 @@ async def test_disabling_login_revokes_sessions_but_preserves_password_and_data(
             assert (await client.get("/api/config")).status_code == (401 if required else 200)
             if required:
                 result = await client.post(
-                    "/api/auth/login", json={"password": "existing-fixture-password"}
+                    "/api/auth/login",
+                    json={"username": "admin", "password": "existing-fixture-password"},
                 )
                 assert result.status_code == 200
                 assert result.json()["authentication_required"]

@@ -29,7 +29,9 @@ async def run(
         limits=httpx.Limits(max_connections=10),
     ) as client:
         password = await asyncio.to_thread(password_file.read_text)
-        login = await client.post("/api/auth/login", json={"password": password.strip()})
+        login = await client.post(
+            "/api/auth/login", json={"username": "admin", "password": password.strip()}
+        )
         login.raise_for_status()
         events = [asyncio.Event() for _ in range(4)]
 

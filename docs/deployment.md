@@ -1,6 +1,6 @@
 # Deployment
 
-This guide covers the default password-protected HTTPS deployment. For explicit certificate-free HTTP without login on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). That stack sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`, with no password or certificate mounts. Anyone who can reach it can view data and change settings.
+This guide covers protected HTTPS. For certificate-free HTTP with username/password login, use the [HTTP Portainer guide](portainer-http-installation.md). Both stacks require authentication and a private password file; HTTP still leaves credentials and sessions unencrypted.
 
 For Portainer, prefer [verified GHCR images](registry-deployment.md) rather than building on the Pi. The development Compose flow below remains a local-build option. Publishing needs only GitHub's automatic token; runtime Octopus credentials stay on the Docker endpoint.
 

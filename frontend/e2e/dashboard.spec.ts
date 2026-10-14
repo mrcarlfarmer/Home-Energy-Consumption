@@ -5,6 +5,7 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
   await expect(page.getByText("HTTP connection:", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Username", { exact: true })).toHaveValue("admin");
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator("#stream-health")).toHaveText("Dashboard connected");
@@ -29,7 +30,7 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
 test("protected endpoints, origin checks and missing data presentation", async ({ page }) => {
   const response = await page.request.get("/api/config");
   expect(response.status()).toBe(401);
-  const denied = await page.request.post("/api/auth/login", { data: { password: "fixture-only-password" } });
+  const denied = await page.request.post("/api/auth/login", { data: { username: "admin", password: "fixture-only-password" } });
   expect(denied.status()).toBe(403);
   await page.goto("/");
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
