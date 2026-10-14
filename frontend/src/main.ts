@@ -35,6 +35,7 @@ function showError(error: unknown): void {
 function clearMessage(): void { text("message", ""); }
 function cleanup(): void {
   generation++;
+  window.onhashchange = null;
   stream?.close(); stream = undefined;
   chart?.destroy(); chart = undefined;
   pending?.abort(); pending = undefined;
@@ -210,6 +211,17 @@ function connect(): void {
     } catch (error) { showError(error); }
   });
 }
+function route(): void {
+  const settings = location.hash === "#settings";
+  element("overview").hidden = settings;
+  element("settings-page").hidden = !settings;
+  for (const link of document.querySelectorAll<HTMLAnchorElement>("nav a")) {
+    if (link.hash === "#settings") link.setAttribute("aria-current", String(settings));
+    else link.removeAttribute("aria-current");
+  }
+  if (settings) window.scrollTo(0, 0);
+  else if (location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+}
 async function renderDashboard(): Promise<void> {
   cleanup();
   config = await api<Config>("/api/config");
@@ -220,11 +232,10 @@ async function renderDashboard(): Promise<void> {
     <a href="#overview" aria-label="Overview" title="Overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Overview</span></a>
     <a href="#history" aria-label="Demand history" title="Demand history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M6 15l4-5 4 3 6-8"/></svg><span>History</span></a>
     <a href="#inverters" aria-label="Inverter sizing" title="Inverter sizing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></svg><span>Inverters</span></a>
-    <a href="#settings-section" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 3v8M16 13v8"/></svg><span>Settings</span></a>
+    <a href="#settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 3v8M16 13v8"/></svg><span>Settings</span></a>
     </nav></aside><div class="workspace"><header><a class="wordmark" href="#overview">home<span>energy</span></a><span class="header-note">YOUR HOME / IN FOCUS</span>
-    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><main id="overview">
+    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><p id="message" role="alert"></p><main id="overview">
     <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Demand telemetry<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
-    <p id="message" role="alert"></p>
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
     ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
@@ -248,7 +259,7 @@ async function renderDashboard(): Promise<void> {
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th></tr></thead><tbody id="thresholds"></tbody></table></div>
     <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 3.68 kW preset is not a G98/G99 compliance assessment.</p>
     <details><summary>Daily sampled peaks</summary><div class="table-scroll"><table><thead><tr><th>Local date</th><th>Peak demand</th><th>Coverage</th></tr></thead><tbody id="days"></tbody></table></div></details></section>
-    <section id="settings-section"><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h2>Settings</h2><form id="settings"><div class="settings-grid">
+    </main><main id="settings-page" hidden><section id="settings-section"><div class="page-heading"><div><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h1>Settings</h1></div></div><form id="settings"><div class="settings-grid">
     <label>Octopus account number<input id="account" autocomplete="off" maxlength="64" placeholder="A-..."></label>
     <label>Electricity meter<select id="device"></select><small>Test account connectivity to discover meters.</small></label>
     <label>Replace Octopus API key<input id="key" type="password" autocomplete="new-password" maxlength="512"><small id="key-status"></small></label>
@@ -258,6 +269,7 @@ async function renderDashboard(): Promise<void> {
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p></form></section>
     </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div></div>`;
   fillSettings(); setRange(1440);
+  window.onhashchange = route; route();
   chart = new DemandChart(element("chart"));
   if (authenticationRequired) {
     element("logout").onclick = async () => {
