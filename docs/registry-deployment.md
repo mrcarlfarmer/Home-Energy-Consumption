@@ -31,11 +31,12 @@ If a future workflow genuinely needs an external API credential, add it through 
 
 ## Registry visibility and access
 
-New GHCR packages are private by default, even when the source repository is public. This workflow does not change either repository or package visibility.
+This workflow does not change either repository or package visibility. Check the package's actual visibility in GitHub before relying on private access; do not infer it from source repository visibility or assume a publishing run changes it. If an existing package is public, newly published versions are publicly downloadable too.
 
 **Private images (recommended if you plan to make the repository private):**
 
 1. In GitHub Packages, confirm the package is linked to this repository and its Actions access allows this repository to publish. If an existing package gives `permission_denied: write_package`, fix its package access rather than adding a broad personal token.
+   Set package visibility to **Private** in its package settings if required. This is a separate owner operation, not performed by the publication workflow; repository privacy alone is insufficient.
 2. Create a **classic PAT** with `read:packages`, owned by an account allowed to read the package. Authorize SSO if required. Do not use a fine-grained PAT for GHCR package authentication or grant write/delete scopes to Portainer.
 3. In Portainer, open **Registries > Add registry > Custom registry**. Set name `GitHub Container Registry`, URL `ghcr.io`, enable authentication and supply the GitHub username and PAT as the password.
 4. Ensure the Portainer user deploying the stack has access to that registry. Store the PAT there, not in YAML, Git, the image or the app's settings. Rotate it before expiry.

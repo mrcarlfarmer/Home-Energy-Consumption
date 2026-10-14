@@ -10,7 +10,7 @@ HTTPS and password authentication remain the application's defaults. This separa
 
 This assumes 64-bit Raspberry Pi OS/Debian and Portainer managing a Docker Standalone endpoint. **You no longer need to build on the Pi.** GitHub Actions publishes verified ARM64/AMD64 images to GHCR automatically.
 
-Follow [registry access and image selection](registry-deployment.md) to add GHCR to Portainer if the image is private. Copy the exact image digest from a successful `Verify` run's Summary for `ENERGY_IMAGE`. The package remains private unless you explicitly change its visibility; a classic read-only package PAT belongs in Portainer's registry credentials, not the stack.
+Follow [registry access and image selection](registry-deployment.md) to add GHCR to Portainer if the image is private. Copy the exact image digest from a successful `Verify` run's Summary for `ENERGY_IMAGE`. Check the package's actual visibility in GitHub rather than assuming it follows repository visibility; a classic read-only package PAT belongs in Portainer's registry credentials, not the stack.
 
 For a local-build fallback, use the [native Pi build instructions](portainer-installation.md#2-build-the-image-on-the-pi) or [ARM64 image transfer](portainer-installation.md#alternative-build-elsewhere-and-transfer-an-arm64-image), then set `ENERGY_PULL_POLICY=never`. Older images from before password-free support still require login.
 
