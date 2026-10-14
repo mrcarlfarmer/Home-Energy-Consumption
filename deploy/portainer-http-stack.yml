@@ -1,5 +1,6 @@
 services:
   energy:
+    container_name: home-energy
     image: "${ENERGY_IMAGE:?Set a published GHCR image reference or local ARM64 tag}"
     platform: linux/arm64
     pull_policy: "${ENERGY_PULL_POLICY:-missing}"
@@ -7,7 +8,9 @@ services:
       - "${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTP_PORT:-8080}:8443"
     environment:
       APP_TRANSPORT: http
-      APP_AUTH_REQUIRED: "false"
+      APP_AUTH_REQUIRED: "true"
+      APP_ADMIN_USERNAME: "${ENERGY_ADMIN_USERNAME:-admin}"
+      APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       APP_DATABASE_PATH: /data/energy.sqlite3
       APP_ALLOWED_HOSTS: "${ENERGY_HOSTNAME:?Set the local hostname},${PI_LAN_IP:?Set the Pi LAN IPv4 address}"
       APP_ALLOWED_ORIGINS: "http://${ENERGY_HOSTNAME:?Set the local hostname}:${HTTP_PORT:-8080},http://${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTP_PORT:-8080}"
@@ -15,6 +18,12 @@ services:
       - type: bind
         source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/data"
         target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${ENERGY_ROOT:?Set the absolute storage directory on the Pi}/secrets/admin-password"
+        target: /run/secrets/admin_password
+        read_only: true
         bind:
           create_host_path: false
     user: "10001:10001"

@@ -1,6 +1,6 @@
 # Deployment
 
-This guide covers the default password-protected HTTPS deployment. For explicit certificate-free HTTP without login on a trusted LAN, use the [HTTP Portainer guide](portainer-http-installation.md). That stack sets `APP_TRANSPORT=http` and `APP_AUTH_REQUIRED=false`, with no password or certificate mounts. Anyone who can reach it can view data and change settings.
+This guide covers protected HTTPS. For certificate-free HTTP with username/password login, use the [HTTP Portainer guide](portainer-http-installation.md). Both stacks require authentication and a private password file; HTTP still leaves credentials and sessions unencrypted.
 
 For Portainer, prefer [verified GHCR images](registry-deployment.md) rather than building on the Pi. The development Compose flow below remains a local-build option. Publishing needs only GitHub's automatic token; runtime Octopus credentials stay on the Docker endpoint.
 
@@ -74,7 +74,7 @@ Other containers can share the Pi's IP using different published ports. If 8443 
 
 ## First login
 
-1. Open the configured HTTPS address and use the bootstrap password.
+1. Open the configured HTTPS address and sign in as `admin` with the bootstrap password. The local-build Compose file uses the default username; custom application deployments can set `APP_ADMIN_USERNAME` (1-64 characters, no surrounding whitespace). Portainer stacks expose it as `ENERGY_ADMIN_USERNAME`.
 2. Enter the Octopus API key and account number in Settings.
 3. Test connectivity to list electricity meters. Select the intended EUI-64 ID; test again when the rate governor permits.
 4. Save settings, then click **Start polling** in the Polling panel beside live demand. The same panel lets you stop collection and save a polling interval (30-3,600 seconds, default 45). These controls update the saved settings immediately; saving an interval alone does not enable polling. The equivalent controls remain available in Settings and take effect when **Save settings** is clicked.

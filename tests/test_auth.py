@@ -35,7 +35,7 @@ async def test_session_and_csrf_survive_restart_but_logout_does_not(tmp_path: Pa
         ) as client,
     ):
         response = await client.post(
-            "/api/auth/login", json={"password": "restart-fixture-password"}
+            "/api/auth/login", json={"username": "admin", "password": "restart-fixture-password"}
         )
         assert response.status_code == 200
         assert f"Max-Age={SESSION_SECONDS}" in response.headers["set-cookie"]

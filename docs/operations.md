@@ -19,11 +19,21 @@ Inspect bounded logs with `docker compose logs --tail 100 energy`. Logs contain 
 
 ## Password reset
 
-For the password-free Portainer setup, `APP_AUTH_REQUIRED=false` skips login and password bootstrap. Anyone who can reach the service can view data and change settings. Startup revokes old authenticated sessions but preserves existing password hashes, API credentials and history. Resetting a password does not re-enable login: change the deployment setting to `true`, supply a bootstrap password file if no hash exists, and recreate the container. See the [password-free deployment guide](portainer-http-installation.md#backups-and-later-changes).
+Both shipped Portainer stacks require username/password login. The username defaults to `admin`; set `ENERGY_ADMIN_USERNAME` in Portainer to override it. Changing the bootstrap file does not replace a stored password hash. Reset the stored password without deleting the database or Octopus configuration:
 
 ```sh
 docker compose exec energy energy-admin password-reset
 ```
+
+For the Portainer container (without needing its Compose checkout), use:
+
+```sh
+docker exec -it home-energy energy-admin password-reset
+```
+
+Keep the private bootstrap file consistent with the new password for future fresh database initialization. Never put it in Git, image layers or environment variables. Changing the username alone does not revoke existing sessions.
+
+If upgrading an explicitly password-free installation, prepare the password file before pulling the new stack; see the [HTTP upgrade guide](portainer-http-installation.md#backups-and-later-changes). The optional `APP_AUTH_REQUIRED=false` mode still exposes data/settings to anyone who can reach the service. Resetting a password alone does not enable login: recreate the container with authentication enabled.
 
 Enter the new password interactively. The hash and persisted-session revocation are updated together in SQLite; running sessions are revoked within 15 seconds. Ordinary restarts preserve dashboard sessions, but clear the upstream token cache.
 

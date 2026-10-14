@@ -54,10 +54,10 @@ export async function api<T>(path: string, body?: unknown, signal?: AbortSignal)
   }
   return data as T;
 }
-export async function session(password?: string): Promise<void> {
+export async function session(password?: string, username?: string): Promise<void> {
   const result = await api<{ csrf_token: string; authentication_required: boolean }>(
     password === undefined ? "/api/auth/session" : "/api/auth/login",
-    password === undefined ? undefined : { password },
+    password === undefined ? undefined : { username, password },
   );
   csrf = result.csrf_token;
   authenticationRequired = result.authentication_required;

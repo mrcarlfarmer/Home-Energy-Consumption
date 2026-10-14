@@ -1,6 +1,6 @@
 # Raspberry Pi installation with Portainer
 
-**Want no certificates or login?** Use the [password-free HTTP installation guide](portainer-http-installation.md) and [HTTP stack](../deploy/portainer-http-stack.yml). Anyone who can reach it can view data and change settings, and browser traffic is unencrypted. It is only appropriate for a trusted LAN. The instructions below remain the password-protected HTTPS alternative.
+**Want no certificates?** Use the [username-protected HTTP guide](portainer-http-installation.md). Both stacks now require login; HTTP is still unencrypted. Default username is `admin`, configurable with `ENERGY_ADMIN_USERNAME`.
 
 ## Deployment choices
 
@@ -160,6 +160,7 @@ On the Pi, choose a long unique password of at least 12 characters. It is not a 
 ```sh
 IFS= read -r -s -p "Dashboard password (12+ characters): " PASSWORD
 printf '\n'
+sudo install -m 400 -o 10001 -g 10001 /dev/null /opt/home-energy/secrets/admin-password
 printf '%s\n' "$PASSWORD" | sudo tee /opt/home-energy/secrets/admin-password >/dev/null
 unset PASSWORD
 sudo chown 10001:10001 /opt/home-energy/secrets/admin-password
@@ -230,6 +231,7 @@ ENERGY_PULL_POLICY=never
 ENERGY_ROOT=/opt/home-energy
 PI_LAN_IP=192.168.1.2
 ENERGY_HOSTNAME=home.energy
+ENERGY_ADMIN_USERNAME=admin
 HTTPS_PORT=8443
 ```
 
@@ -244,7 +246,7 @@ The container retains the development deployment's hardening: non-root user, rea
 
 Open `https://home.energy:8443` (or your selected host port) directly in a browser after verifying local DNS resolves it to `192.168.1.2`. The certificate should be trusted with a matching hostname; do not treat clicking through a warning as completing the HTTPS setup.
 
-For a fresh database, sign in using the bootstrap password, enter your Octopus API key/account, discover and select the meter, save settings, then click **Start polling**. For an imported database, use the password from the reset step; saved polling may already be enabled.
+For a fresh database, sign in as `admin` (or `ENERGY_ADMIN_USERNAME`) using the bootstrap password, enter your Octopus API key/account, discover and select the meter, save settings, then click **Start polling**. For an imported database, use the password from the reset step; saved polling may already be enabled. Updating the bootstrap file does not overwrite an existing database password hash.
 
 Confirm all of the following before retiring the PC instance:
 

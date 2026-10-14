@@ -72,12 +72,14 @@ class Auth:
         self.global_attempts.append(now)
         return True
 
-    async def login(self, password: str) -> tuple[str, Session] | None:
+    async def login(
+        self, password: str, *, identity_valid: bool = True
+    ) -> tuple[str, Session] | None:
         async with self.verifying:
             await self.refresh_password()
             encoded = self.password_hash
             valid = await asyncio.to_thread(verify_password, password, encoded)
-            if not valid or encoded != self.password_hash:
+            if not valid or not identity_valid or encoded != self.password_hash:
                 return None
             token = secrets.token_urlsafe(32)
             digest = hashlib.sha256(token.encode()).hexdigest()

@@ -131,10 +131,12 @@ async def test_transport_preserves_authentication_csrf_and_cookie_policy(
     ):
         assert (await client.get("/api/config")).status_code == 401
         assert (
-            await client.post("/api/auth/login", json={"password": "incorrect"})
+            await client.post(
+                "/api/auth/login", json={"username": "admin", "password": "incorrect"}
+            )
         ).status_code == 401
         response = await client.post(
-            "/api/auth/login", json={"password": "transport-fixture-password"}
+            "/api/auth/login", json={"username": "admin", "password": "transport-fixture-password"}
         )
         assert response.status_code == 200
         cookie = response.headers["set-cookie"]

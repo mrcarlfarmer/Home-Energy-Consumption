@@ -43,14 +43,15 @@ function renderLogin(message = ""): void {
   cleanup();
   root.innerHTML = `<main class="login"><p class="eyebrow">YOUR HOME, IN FOCUS</p><h1>Home Energy</h1>
     <p>Private electricity monitoring and inverter sizing.</p>
-    <form id="login"><label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
+    <form id="login"><label>Username<input id="username" autocomplete="username" value="admin" maxlength="64" required></label>
+    <label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
     <button type="submit">Sign in</button></form><p id="message" role="alert"></p>
     <small>${transportNotice || "Credentials stay on your Raspberry Pi. Use your trusted HTTPS address."}</small></main>`;
   text("message", message);
   element<HTMLFormElement>("login").onsubmit = async (event) => {
     event.preventDefault(); clearMessage();
     try {
-      await session(element<HTMLInputElement>("password").value);
+      await session(element<HTMLInputElement>("password").value, element<HTMLInputElement>("username").value);
       await renderDashboard();
     } catch (error) { showError(error); }
   };

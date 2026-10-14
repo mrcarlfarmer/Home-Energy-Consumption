@@ -1,11 +1,14 @@
 services:
   energy:
+    container_name: home-energy
     image: "${ENERGY_IMAGE:?Set a published GHCR image reference or local ARM64 tag}"
     platform: linux/arm64
     pull_policy: "${ENERGY_PULL_POLICY:-missing}"
     ports:
       - "${PI_LAN_IP:?Set the Pi LAN IPv4 address}:${HTTPS_PORT:-8443}:8443"
     environment:
+      APP_AUTH_REQUIRED: "true"
+      APP_ADMIN_USERNAME: "${ENERGY_ADMIN_USERNAME:-admin}"
       APP_DATABASE_PATH: /data/energy.sqlite3
       APP_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       APP_TLS_CERT_FILE: /run/secrets/tls_certificate

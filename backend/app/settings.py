@@ -15,6 +15,7 @@ class Settings:
     static: Path = Path(__file__).parent / "static"
     secure: bool = True
     auth_required: bool = True
+    admin_username: str = "admin"
     start_workers: bool = True
 
     @classmethod
@@ -30,6 +31,11 @@ class Settings:
         auth_required = os.getenv("APP_AUTH_REQUIRED", "true")
         if auth_required not in ("true", "false"):
             raise ValueError("APP_AUTH_REQUIRED must be true or false")
+        username = os.getenv("APP_ADMIN_USERNAME", "admin")
+        if not username or username != username.strip() or len(username) > 64:
+            raise ValueError(
+                "APP_ADMIN_USERNAME must contain 1-64 characters without outer whitespace"
+            )
         hosts = tuple(x.strip() for x in os.getenv("APP_ALLOWED_HOSTS", "").split(",") if x.strip())
         origins: list[str] = []
         for value in os.getenv("APP_ALLOWED_ORIGINS", "").split(","):
@@ -67,4 +73,5 @@ class Settings:
             allowed_origins=tuple(origins),
             secure=secure,
             auth_required=auth_required == "true",
+            admin_username=username,
         )

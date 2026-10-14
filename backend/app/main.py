@@ -236,9 +236,14 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         address = request.client.host if request.client else "unknown"
         if not app.state.auth.allowed(address):
             raise Problem(429, "login_throttled", "Too many login attempts", 60)
-        result = await app.state.auth.login(data.password.get_secret_value())
+        result = await app.state.auth.login(
+            data.password.get_secret_value(),
+            identity_valid=secrets.compare_digest(
+                data.username.encode(), settings.admin_username.encode()
+            ),
+        )
         if result is None:
-            raise Problem(401, "invalid_credentials", "Invalid password")
+            raise Problem(401, "invalid_credentials", "Invalid username or password")
         token, session = result
         response.set_cookie(
             COOKIE,
