@@ -4,7 +4,7 @@ One process owns the collector, upstream token cache, bounded session cache, SSE
 
 Browser transport defaults to HTTPS. Explicit `APP_TRANSPORT=http` enables certificate-free trusted-LAN HTTP without changing the upstream Kraken HTTPS connection. HTTP retains password/CSRF/Host/Origin checks but cannot protect credentials or session cookies from network interception. The internal listener stays on port 8443 in either mode; the health probe follows the selected transport.
 
-Authentication is independently controlled by `APP_AUTH_REQUIRED`, default `true`. Explicit `false` skips password bootstrap and the password watcher, exposes the dashboard/API without login, and revokes persisted sessions while preserving any existing password hash. The frontend obtains a process-local CSRF token without creating an authentication session; writes still require that token and a trusted Origin. The HTTP Portainer stack explicitly disables login and mounts only the data directory.
+Authentication is independently controlled by `APP_AUTH_REQUIRED`, default `true`. Both shipped Portainer stacks explicitly enable it and mount a private bootstrap password file read-only alongside the data directory. Explicit `false` remains an opt-out: it skips password bootstrap and the password watcher, exposes the dashboard/API without login, and revokes persisted sessions while preserving any existing password hash. In that mode the frontend obtains a process-local CSRF token without creating an authentication session; writes still require that token and a trusted Origin.
 
 ```mermaid
 flowchart LR
@@ -49,6 +49,8 @@ The Content Security Policy permits inline styles for uPlot's dynamic canvas pos
 ## Authentication and errors
 
 With login enabled, only the login shell and minimal health endpoints are public. JSON/SSE require an opaque cookie session. Settings/test/logout require CSRF plus trusted Origin. Password verification uses versioned PBKDF2-HMAC-SHA256 hashes; sessions and login limiter state are bounded. A password reset invalidates running sessions within 15 seconds. Password-free mode removes the session requirement, not the Host/Origin/CSRF checks.
+
+There is one administrator identity, configured by `APP_ADMIN_USERNAME` (default `admin`), not a user-management system. Login requires both username and password. Incorrect usernames and passwords receive the same error; a username mismatch still performs password verification and cannot create a session. The username is configuration rather than a secret and is not stored in the database. Changing it does not revoke existing sessions; use the password-reset command when revocation is required.
 
 Keys are stored only in the private database. JWTs remain in process memory and refresh single-flight. GraphQL HTTP 200 errors are classified alongside HTTP 401/429/5xx. Failed or partial upstream responses are never treated as healthy collection. Retry timing is shared with connectivity tests.
 
