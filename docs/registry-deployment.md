@@ -76,6 +76,8 @@ For HTTPS use the original stack and `HTTPS_PORT=8443` instead, plus its existin
 4. Deploy/update the stack. The default `missing` pull policy downloads the chosen reference if absent, reusing an identical pinned image if present. Portainer may also offer **Re-pull image and redeploy**; enable it when deliberately refreshing a tag. Do not set `never` for an image that has not been downloaded.
 5. Confirm the container is healthy and running the intended reference. Open `http://home.energy:8080`, check settings/history and verify fresh telemetry with polling enabled. A successful deployment request alone is not a health check.
 
+Both Portainer stacks set `container_name: home-energy`, rather than Compose's generated `home-energy-energy-1`. For an existing Web editor stack, add this line under the `energy:` service and update the same stack; the container is recreated but the bind-mounted data stays intact. Do not rename it only in the Containers view, as the stack configuration should remain the source of truth. The fixed name permits only one such container on a Docker endpoint; do not deploy the HTTP and HTTPS alternatives simultaneously.
+
 **HTTP/no-login remains a trusted-LAN-only deployment:** anyone who can reach it can read data/change settings, and browser traffic is unencrypted. A private GitHub repository/image does not add dashboard authentication or encryption. Do not publicly expose Portainer or the app.
 
 ### Use latest for simpler manual updates

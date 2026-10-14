@@ -1,5 +1,6 @@
 services:
   energy:
+    container_name: home-energy
     image: "${ENERGY_IMAGE:?Set a published GHCR image reference or local ARM64 tag}"
     platform: linux/arm64
     pull_policy: "${ENERGY_PULL_POLICY:-missing}"
