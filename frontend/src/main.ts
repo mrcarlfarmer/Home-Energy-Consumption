@@ -233,9 +233,9 @@ async function renderDashboard(): Promise<void> {
     <a href="#history" aria-label="Demand history" title="Demand history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M6 15l4-5 4 3 6-8"/></svg><span>History</span></a>
     <a href="#inverters" aria-label="Inverter sizing" title="Inverter sizing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></svg><span>Inverters</span></a>
     <a href="#settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 3v8M16 13v8"/></svg><span>Settings</span></a>
-    </nav></aside><div class="workspace"><header><a class="wordmark" href="#overview">home<span>energy</span></a><span class="header-note">YOUR HOME / IN FOCUS</span>
-    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><p id="message" role="alert"></p><main id="overview">
-    <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Demand telemetry<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
+    ${authenticationRequired ? '<button id="logout" class="nav-button" aria-label="Sign out" title="Sign out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>' : ""}
+    </nav></aside><div class="workspace"><p id="message" role="alert"></p><main id="overview">
+    <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Home Energy<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
     ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
