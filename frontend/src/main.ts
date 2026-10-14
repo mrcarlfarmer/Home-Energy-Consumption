@@ -118,6 +118,9 @@ function localDate(date: Date): string {
 }
 function setRange(minutes: number): void {
   selectedMinutes = minutes;
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.minutes) === minutes));
+  }
   const end = new Date();
   element<HTMLInputElement>("from").value = localDate(new Date(end.getTime() - minutes * 60000));
   element<HTMLInputElement>("to").value = localDate(end);
@@ -211,29 +214,41 @@ async function renderDashboard(): Promise<void> {
   cleanup();
   config = await api<Config>("/api/config");
   lastVersion = -1;
-  root.innerHTML = `<div id="dashboard"><header><div><p class="eyebrow">YOUR HOME, IN FOCUS</p><h1>Home Energy</h1></div>
-    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><main>
+  root.innerHTML = `<div id="dashboard"><a class="skip-link" href="#overview">Skip to dashboard</a>
+    <aside class="sidebar"><a class="brand-mark" href="#overview" aria-label="Home Energy overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z"/></svg></a>
+    <nav aria-label="Dashboard navigation">
+    <a href="#overview" aria-label="Overview" title="Overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Overview</span></a>
+    <a href="#history" aria-label="Demand history" title="Demand history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M6 15l4-5 4 3 6-8"/></svg><span>History</span></a>
+    <a href="#inverters" aria-label="Inverter sizing" title="Inverter sizing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></svg><span>Inverters</span></a>
+    <a href="#settings-section" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 3v8M16 13v8"/></svg><span>Settings</span></a>
+    </nav></aside><div class="workspace"><header><a class="wordmark" href="#overview">home<span>energy</span></a><span class="header-note">YOUR HOME / IN FOCUS</span>
+    ${authenticationRequired ? '<button id="logout" class="secondary">Sign out</button>' : ""}</header><main id="overview">
+    <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Demand telemetry<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
     <p id="message" role="alert"></p>
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
     ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
-    <section class="live-grid"><article class="live-card"><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
-    <article><h2>Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
+    <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
+    <article><span class="channel">CH.02</span><p>Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
+    <article><span class="channel">CH.03</span><p>Sampled peak</p><strong id="peak">--</strong><small>Highest observed reading</small></article>
+    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small>Within the selected window</small></article></section>
+    <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
     <div class="section-heading"><h3>Polling</h3><button id="toggle-polling" type="button">Start polling</button></div>
     <p id="polling-status" role="status"></p>
     <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
-    <p id="polling-help" class="note"></p></form></article></section>
-    <section><div class="section-heading"><h2>Demand &amp; inverter sizing</h2><select id="history-device" aria-label="Historical meter"></select></div>
+    <p id="polling-help" class="note"></p></form></section>
+    <section id="history"><div class="section-heading"><div><p class="eyebrow">OBSERVED DEMAND</p><h2>Demand, in detail</h2></div><select id="history-device" aria-label="Historical meter"></select></div>
     <div class="presets"><button data-minutes="5">5 min</button><button data-minutes="15">15 min</button><button data-minutes="30">30 min</button><button data-minutes="60">1 hour</button><button data-minutes="1440">24 hours</button><button data-minutes="10080">7 days</button><button data-minutes="43200">30 days</button></div>
     <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" required></label>
     <label>To (browser local time)<input id="to" type="datetime-local" required></label><button>Apply custom range</button></form>
-    <p id="analysis-status" role="status"></p><div class="metrics"><article><span>Observed coverage</span><strong id="coverage">--</strong></article><article><span>Estimated import</span><strong id="energy">--</strong></article><article><span>Sampled peak</span><strong id="peak">--</strong></article></div>
+    <p id="analysis-status" role="status"></p>
     <div id="chart" aria-label="Demand history chart"></div>
     <p class="note">Gaps are unknown, not zero. Incomplete bucket means and incomplete 15-minute windows are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
-    <div class="table-scroll"><table><thead><tr><th>Inverter rating</th><th>Observed time above</th><th>Energy while above</th><th>Excess energy</th></tr></thead><tbody id="thresholds"></tbody></table></div>
+    </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span class="local-badge">SELECTED WINDOW</span></div>
+    <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th></tr></thead><tbody id="thresholds"></tbody></table></div>
     <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 3.68 kW preset is not a G98/G99 compliance assessment.</p>
     <details><summary>Daily sampled peaks</summary><div class="table-scroll"><table><thead><tr><th>Local date</th><th>Peak demand</th><th>Coverage</th></tr></thead><tbody id="days"></tbody></table></div></details></section>
-    <section><h2>Settings</h2><form id="settings"><div class="settings-grid">
+    <section id="settings-section"><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h2>Settings</h2><form id="settings"><div class="settings-grid">
     <label>Octopus account number<input id="account" autocomplete="off" maxlength="64" placeholder="A-..."></label>
     <label>Electricity meter<select id="device"></select><small>Test account connectivity to discover meters.</small></label>
     <label>Replace Octopus API key<input id="key" type="password" autocomplete="new-password" maxlength="512"><small id="key-status"></small></label>
@@ -241,7 +256,7 @@ async function renderDashboard(): Promise<void> {
     <label>Display / calendar timezone<input id="timezone" required></label>
     <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling first)</label></div></div>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p></form></section>
-    </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div>`;
+    </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div></div>`;
   fillSettings(); setRange(1440);
   chart = new DemandChart(element("chart"));
   if (authenticationRequired) {
@@ -249,7 +264,11 @@ async function renderDashboard(): Promise<void> {
       try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
     };
   }
-  element<HTMLFormElement>("range").onsubmit = event => { event.preventDefault(); selectedMinutes = 0; clearMessage(); void refresh(); };
+  element<HTMLFormElement>("range").onsubmit = event => {
+    event.preventDefault(); selectedMinutes = 0;
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) button.setAttribute("aria-pressed", "false");
+    clearMessage(); void refresh();
+  };
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
     button.onclick = () => { setRange(Number(button.dataset.minutes)); clearMessage(); void refresh(); };
   }

@@ -2,6 +2,35 @@ import { test, expect } from "@playwright/test";
 
 test.use({ baseURL: "http://127.0.0.1:8766" });
 
+test("Carbon Aurora theme and navigation remain usable across screen sizes", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  const theme = await page.locator("#dashboard").evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      scheme: style.colorScheme,
+      background: style.getPropertyValue("--bg").trim(),
+      accent: style.getPropertyValue("--accent").trim(),
+      chart: style.getPropertyValue("--chart-mean").trim(),
+      font: style.fontFamily,
+    };
+  });
+  expect(theme).toMatchObject({ scheme: "dark", background: "#0c0c19", accent: "#bbabff", chart: "#a6dfe7" });
+  expect(theme.font).toContain("monospace");
+  for (const width of [1440, 1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const nav = page.getByRole("navigation", { name: "Dashboard navigation" });
+    await nav.getByRole("link", { name: "Settings", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeInViewport();
+    await nav.getByRole("link", { name: "Inverter sizing", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Explore inverter sizing" })).toBeInViewport();
+    await nav.getByRole("link", { name: "Demand history", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Demand, in detail" })).toBeInViewport();
+    await expect(page.locator("#chart canvas").first()).toBeVisible();
+  }
+});
+
 test("opens directly without cookies, keeps settings and streams without login", async ({ page, context }) => {
   const errors: string[] = [];
   const loginRequests: string[] = [];
