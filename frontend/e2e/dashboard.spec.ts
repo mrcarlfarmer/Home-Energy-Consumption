@@ -14,11 +14,13 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#thresholds tr")).toHaveCount(3);
   await expect(page.locator("#chart canvas").first()).toBeVisible();
   await expect(page.locator("#peak")).toHaveText("4 kW");
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.locator("#key-status")).toContainText("API key saved");
   expect(await page.content()).not.toContain("fixture-only-key");
   await page.getByLabel("Polling interval (seconds)").fill("60");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.locator("#test-result")).toHaveText("Settings saved.");
+  await page.getByRole("link", { name: "Overview", exact: true }).click();
   await expect(page.getByLabel("Check every (seconds)")).toHaveValue("60");
   await page.getByRole("button", { name: "7 days", exact: true }).click();
   await expect(page.getByRole("button", { name: "7 days", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -52,8 +54,10 @@ test("live polling controls persist and synchronize without saving credential dr
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
   await expect(page.locator("#polling-status")).toContainText("Polling disabled");
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await page.getByLabel("Replace Octopus API key").fill("unsaved-fixture-key");
   await page.getByLabel("Octopus account number").fill("A-UNSAVED");
+  await page.getByRole("link", { name: "Overview", exact: true }).click();
   await page.getByLabel("Check every (seconds)").fill("75");
   await page.getByRole("button", { name: "Save interval", exact: true }).click();
   await expect(page.getByLabel("Polling interval (seconds)", { exact: true })).toHaveValue("75");
@@ -117,6 +121,7 @@ test("polling errors leave the saved state unchanged and controls usable", async
   await expect(page.locator("#message")).toHaveText("Synthetic configuration failure");
   await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Save interval", exact: true })).toBeEnabled();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save settings", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Enable polling", { exact: true })).not.toBeChecked();
 });
