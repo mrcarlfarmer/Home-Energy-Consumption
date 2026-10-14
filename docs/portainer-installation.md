@@ -2,6 +2,13 @@
 
 **Want no certificates?** Use the [username-protected HTTP guide](portainer-http-installation.md). Both stacks now require login; HTTP is still unencrypted. Default username is `admin`, configurable with `ENERGY_ADMIN_USERNAME`.
 
+**Storage requirement:** before installing or upgrading, follow
+[bounded storage preparation and migration](storage-management.md). The stack
+requires a mounted bounded data filesystem, not an ordinary host directory.
+The path examples below assume that filesystem is mounted at `ENERGY_ROOT/data`.
+For an existing installation, migrate to a new root and adjust `ENERGY_ROOT`
+rather than overwriting its current database.
+
 ## Deployment choices
 
 **Recommended: download a verified image from GHCR**, using the [automated publishing and registry deployment guide](registry-deployment.md). This eliminates Git/Buildx and local builds on the Pi. Continue below for HTTPS files, storage and migration; replace local `ENERGY_IMAGE` examples with the published digest and set `ENERGY_PULL_POLICY=missing`. For private packages add read-only registry credentials in Portainer.
@@ -197,7 +204,7 @@ Leave the PC collector stopped after a successful cutover. If the transfer/setup
 On the Pi, **before deploying the stack**, install into the new empty data directory:
 
 ```sh
-if [ -n "$(sudo find /opt/home-energy/data -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+if [ -n "$(sudo find /opt/home-energy/data -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)" ]; then
   echo "The target data directory is not empty. Stop and choose a recovery plan; do not overwrite it."
 else
   sudo install -o 10001 -g 10001 -m 600 \
@@ -274,14 +281,21 @@ Expected limits are **146800640** bytes for both Memory and MemorySwap, user **1
 Keep timestamped backups on separate protected storage, not only alongside the live database. For a quiesced backup, stop the app in Portainer, then run on the Pi:
 
 ```sh
+# Use separate capacity-limited backup storage and a finite backup rotation.
+sudo install -d -m 700 -o 10001 -g 10001 /srv/home-energy-backups
 docker run --rm --network none --user 10001:10001 \
   --memory 140m --memory-swap 140m \
   --mount type=bind,src=/opt/home-energy/data,dst=/data \
+  --mount type=bind,src=/srv/home-energy-backups,dst=/backup \
   --entrypoint energy-admin "${ENERGY_IMAGE:?Set ENERGY_IMAGE to your deployed image tag}" \
-  backup --output "/data/backups/energy-$(date +%Y%m%d-%H%M%S).sqlite3"
+  backup --output "/backup/energy-$(date +%Y%m%d-%H%M%S).sqlite3"
 ```
 
 Restart the existing container in Portainer afterward. The command refuses to overwrite a backup. For recovery, restore only while stopped and revoke restored sessions with `password-reset` before serving the application again.
+
+The earlier PC transfer example applies to the original trial deployment. For a
+deployment already using bounded storage, create/export the transfer backup on an
+external backup mount as above; do not assume a second database fits under `/data`.
 
 For an upgrade, select a new verified GHCR digest (or build a new local ARM64 tag), take a backup and change `ENERGY_IMAGE` in Portainer. Use `ENERGY_PULL_POLICY=missing` for GHCR or `never` for local images, then update/recreate the same stack. Preserve the data/secret mounts. Keep the prior image and its compatible backup until the upgrade is accepted; older images refuse newer database schemas, so rollback can require restoring the matching backup rather than simply choosing the old image.
 

@@ -10,16 +10,29 @@ export interface Snapshot {
   health: {
     polling_state: string; telemetry_state: string; storage_state: string;
     error_code: string | null; last_success_at: string | null; next_attempt_at: string | null;
+    last_attempt_at: string | null; last_stored_at: string | null;
     recovery_incomplete: boolean;
     low_disk: boolean;
+    database_bytes: number | null; disk_free_bytes: number | null;
+    storage_budget_bytes: number; storage_paused: boolean;
+    maintenance_error: string | null; last_maintenance_at: string | null;
+    recovery_pending: boolean; recovery_cursor_at: string | null;
+    recovery_target_at: string | null; recovery_gap_count: number;
+    recovery_error: string | null;
   };
 }
 export interface Metrics {
   coverage_pct: number; observed_seconds: number; requested_seconds: number;
   import_energy_kwh: number | null; sampled_peak_w: number | null; sampled_peak_at: string | null;
 }
+export interface StorageStatus {
+  policy: { raw_days: number; five_minute_days: number; daily_days: number; recovery_days: number };
+  retention: { five_before_us: number; archive_timezone: string | null } | null;
+}
 export interface Summary extends Metrics {
   device_id: string;
+  warnings: string[];
+  from: string; to: string;
   thresholds: {
     threshold_w: number; seconds_above: number; time_above_pct: number | null;
     energy_when_above_kwh: number | null; excess_energy_kwh: number | null;
@@ -28,6 +41,7 @@ export interface Summary extends Metrics {
 }
 export interface History {
   interval_seconds: number;
+  bucket_alignment: string; warnings: string[];
   series: {
     bucket_start_epoch_s: number[]; bucket_end_epoch_s: number[];
     mean_import_w: (number | null)[]; sampled_peak_w: (number | null)[];

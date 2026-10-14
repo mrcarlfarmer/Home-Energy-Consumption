@@ -54,7 +54,7 @@ async def test_login_config_redaction_csrf_and_bounds(tmp_path: Path) -> None:
             "/api/analytics/history",
             params={
                 "from": "2026-01-01T00:00:00Z",
-                "to": "2027-03-01T00:00:00Z",
+                "to": "2037-03-01T00:00:00Z",
             },
         )
         assert bad.status_code == 422

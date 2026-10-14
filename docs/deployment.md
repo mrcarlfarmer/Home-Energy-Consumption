@@ -6,7 +6,12 @@ For Portainer, prefer [verified GHCR images](registry-deployment.md) rather than
 
 ## Prerequisites
 
-Use a Raspberry Pi with a 64-bit Linux OS, Docker Engine and the Docker Compose plugin. Keep host time synchronized. Store `/data` on a local filesystem, preferably SSD or high-endurance storage, not NFS/SMB. Reserve capacity for indefinite raw retention and backups.
+Use a Raspberry Pi with a 64-bit Linux OS, Docker Engine and the Docker Compose
+plugin. Keep host time synchronized. Store `/data` on a dedicated bounded local
+filesystem, preferably SSD or high-endurance storage, not NFS/SMB.
+**Before installing or upgrading**, follow [bounded storage preparation and database
+migration](storage-management.md). Ordinary directories/named volumes on a larger
+filesystem are refused by the shipped stacks.
 
 All commands below target the Linux deployment host. The initial image build needs internet access; the installed dashboard's static assets do not.
 
@@ -56,6 +61,7 @@ Copy `.env.example` to `.env` and set:
 | `ADMIN_PASSWORD_SECRET_FILE` | Host path to the bootstrap password file |
 | `TLS_CERTIFICATE_FILE` | Host path to the certificate/chain |
 | `TLS_PRIVATE_KEY_FILE` | Host path to the leaf private key |
+| `ENERGY_DATA_DIRECTORY` | Mounted bounded filesystem prepared using the storage guide |
 
 The first allowed hostname must appear in the certificate SANs. The health probe connects over loopback while validating that hostname against the mounted certificate; it never disables certificate validation. It explicitly trusts the mounted certificate as a partial-chain anchor, so a locally issued leaf works without shipping the CA's private key.
 
@@ -66,7 +72,8 @@ docker compose ps
 docker compose logs --tail 50 energy
 ```
 
-The named volume receives `/data`'s private UID 10001 ownership on initial creation. If using a pre-existing/bind-mounted data directory instead, provision correct ownership before starting.
+The bounded bind-mounted data filesystem must have private UID/GID 10001 ownership
+before starting; the storage preparation helper provisions this.
 
 Only port 8443 is published. Restrict it with the host firewall to the trusted LAN. Do not create router port-forwarding rules. For future remote access use an authenticated VPN/HTTPS access layer and deliberately revise the trusted Host/Origin configuration.
 
