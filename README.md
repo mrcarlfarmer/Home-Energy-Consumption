@@ -5,6 +5,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 ## Features
 
 - Live grid demand and separate collection, freshness, storage and connection indicators over SSE.
+- Responsive dark instrument-console UI with a midnight/lavender palette, ice-blue charts and direct navigation to history, inverter comparisons and settings.
 - 24-hour, 7-day, 30-day and custom history, sampled peaks and trailing 15-minute demand.
 - Inverter comparisons at 3.68, 5 and 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.

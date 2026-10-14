@@ -20,6 +20,8 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#test-result")).toHaveText("Settings saved.");
   await expect(page.getByLabel("Check every (seconds)")).toHaveValue("60");
   await page.getByRole("button", { name: "7 days", exact: true }).click();
+  await expect(page.getByRole("button", { name: "7 days", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "24 hours", exact: true })).toHaveAttribute("aria-pressed", "false");
   await expect(page.locator("#analysis-status")).toContainText("Chart buckets: 15 min");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByLabel("Dashboard password")).toBeVisible();
@@ -38,6 +40,7 @@ test("protected endpoints, origin checks and missing data presentation", async (
   await page.locator("#from").fill("2025-01-01T00:00");
   await page.locator("#to").fill("2025-01-02T00:00");
   await page.getByRole("button", { name: "Apply custom range" }).click();
+  await expect(page.locator('[data-minutes][aria-pressed="true"]')).toHaveCount(0);
   await expect(page.locator("#coverage")).toHaveText("0%");
   await expect(page.locator("#energy")).toContainText("Unavailable");
 });
