@@ -10,7 +10,7 @@ The `Verify` workflow runs backend checks, browser scenarios and an AMD64/ARM64 
 ghcr.io/mrcarlfarmer/home-energy-consumption:sha-<full-40-character-commit>
 ```
 
-Pull requests and other branches never publish. You can also run `Verify` manually from Actions on `main`; other manually selected branches only validate. There are no release-tag or `latest` aliases: each deployment selects a verified commit explicitly, rather than silently following a moving image tag.
+Pull requests and other branches never publish. You can also run `Verify` manually from Actions on `main`; other manually selected branches only validate. After publishing a verified image, the workflow updates `:latest` only if its commit is still the current `main` head. Publication jobs are serialized, preventing an older build or rerun from overwriting a newer latest alias. If main advances during verification, the older commit image remains available but does not move `latest`. Failed verification leaves the previous alias unchanged. There are no release-version aliases.
 
 The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
 
@@ -77,6 +77,19 @@ For HTTPS use the original stack and `HTTPS_PORT=8443` instead, plus its existin
 5. Confirm the container is healthy and running the intended reference. Open `http://home.energy:8080`, check settings/history and verify fresh telemetry with polling enabled. A successful deployment request alone is not a health check.
 
 **HTTP/no-login remains a trusted-LAN-only deployment:** anyone who can reach it can read data/change settings, and browser traffic is unencrypted. A private GitHub repository/image does not add dashboard authentication or encryption. Do not publicly expose Portainer or the app.
+
+### Use latest for simpler manual updates
+
+Instead of changing the image digest on every upgrade, set:
+
+```dotenv
+ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption:latest
+ENERGY_PULL_POLICY=always
+```
+
+Use your selected `GHCR_PACKAGE` image path instead if you publish to a different private package. On a deliberate stack deployment/redeployment, Docker pulls the current alias. In Portainer select **Re-pull image and redeploy** when updating the stack. This does not watch the registry, restart the running app when a build completes, or schedule automatic updates.
+
+`latest` is a moving alias, not an upgrade safety guarantee. Back up the database and record the currently running digest before redeploying. Use the old digest for rollback rather than `latest`; pinned digests remain the more reproducible deployment choice.
 
 ## Upgrade and rollback
 

@@ -94,17 +94,38 @@ jobs:
         env:
           IMAGE: ${{ steps.image.outputs.name }}
         run: python3 .github/scripts/check_registry_visibility.py
+      - name: Update latest for current main
+        id: latest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          MAIN_REVISION=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          if [ "$MAIN_REVISION" = "$REVISION" ]; then
+            docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Main has advanced; retaining this commit image without moving latest."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Write deployment references
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           REVISION: ${{ github.sha }}
           DIGEST: ${{ steps.build.outputs.digest }}
+          LATEST_UPDATED: ${{ steps.latest.outputs.updated }}
         run: |
           {
             echo '## Verified container image'
             echo
             printf 'Commit tag: `%s:sha-%s`\n\n' "$IMAGE" "$REVISION"
             printf 'Exact Portainer image: `%s@%s`\n\n' "$IMAGE" "$DIGEST"
+            if [ "$LATEST_UPDATED" = true ]; then
+              printf 'Latest alias: `%s:latest` (updated to this build).\n\n' "$IMAGE"
+            else
+              echo 'Latest alias was not changed because main has advanced.'
+            fi
             echo 'Platforms: linux/arm64 and linux/amd64.'
             echo 'Deploy manually after taking a database backup. Package visibility is managed separately in GitHub.'
           } >> "$GITHUB_STEP_SUMMARY"

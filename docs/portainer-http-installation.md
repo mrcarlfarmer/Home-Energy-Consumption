@@ -74,6 +74,8 @@ HTTP_PORT=8080
 5. Allow the image to be pulled from GHCR; `missing` downloads a new digest if absent. For a private package configure the Portainer registry first. Local-build users must instead set `ENERGY_PULL_POLICY=never`.
 6. Deploy/update the stack and confirm the container becomes healthy.
 
+For simpler manual upgrades, use `ENERGY_IMAGE=ghcr.io/mrcarlfarmer/home-energy-consumption:latest` and `ENERGY_PULL_POLICY=always`, then choose **Re-pull image and redeploy** when updating. The verified current-main build updates `latest` automatically, but the running Pi does not update until redeployed. See [latest and rollback guidance](registry-deployment.md#use-latest-for-simpler-manual-updates).
+
 The only host mount is the private data directory. There are no password/certificate mounts or TLS variables. Do not put the Octopus API key in the stack or its environment-variable form.
 
 The stack retains the 140 MiB memory limit, no extra swap allowance, non-root user, read-only root filesystem, bounded logs and dropped capabilities. Keep capacity for the Pi OS, Docker, Portainer and other containers. Bind to the reserved LAN IP and use Docker-aware firewall/network restrictions; do not expose the published HTTP port on the internet.
