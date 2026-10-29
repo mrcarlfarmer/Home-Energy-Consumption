@@ -11,6 +11,14 @@ See [storage management](storage-management.md) for pause/recovery semantics.
 
 Token refresh is single-flight and proactive. A rejected token gets one renewal/operation retry. Persistent auth/configuration failures stop automatic retries until settings change or a successful test of the saved credentials resumes already-enabled polling. HTTP and GraphQL throttling share cooldowns with connectivity tests. Transient failures use bounded exponential backoff/jitter and respect vendor retry timing.
 
+Kraken's GraphQL `KT-CT-1143` (invalid Authorization credential) is treated as a
+rejected access token, including when returned with HTTP 200: renew once and retry
+the operation, rather than stopping immediately as a configuration error. On older
+images showing `graphql_KT-CT-1143`, test the saved credentials in Settings to resume
+already-enabled collection. Confirm that the last measurement timestamp advances;
+a displayed demand value alone can be a stale stored reading. Select a wider history
+range to distinguish missing recent collection from missing stored history.
+
 Interpret health indicators separately:
 
 - **Dashboard connected:** the browser has an SSE connection to the Pi.
