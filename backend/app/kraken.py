@@ -26,7 +26,7 @@ DEVICES = """query ElectricityDevices($accountNumber:String!) {
   }
  }
 }"""
-AUTH_CODES = {"KT-CT-1111", "KT-CT-1112", "KT-CT-1124", "KT-CT-1130"}
+AUTH_CODES = {"KT-CT-1111", "KT-CT-1112", "KT-CT-1124", "KT-CT-1130", "KT-CT-1143"}
 RATE_CODES = {"KT-CT-1199", "KT-GB-4042"}
 
 

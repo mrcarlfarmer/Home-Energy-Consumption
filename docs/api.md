@@ -48,7 +48,9 @@ Reconnect always gets the latest complete snapshot, even when a `Last-Event-ID` 
 
 ## Analytics
 
-Both endpoints accept `from` and `to` as timezone-aware RFC3339 strings, forming `[from,to)`, at most 366 days. Optional `device_id` selects one stored meter; omission selects the active meter. No cross-meter aggregation occurs.
+Both endpoints accept `from` and `to` as timezone-aware RFC3339 strings, forming
+`[from,to)`, at most 3653 days. Optional `device_id` selects one stored meter;
+omission selects the active meter. No cross-meter aggregation occurs.
 
 `GET /api/analytics/summary` additionally accepts `timezone` (default `Europe/London`). It returns observed/requested duration, coverage, estimated import kWh, sampled peak/time, local daily peaks and exactly three thresholds:
 
@@ -64,9 +66,23 @@ Both endpoints accept `from` and `to` as timezone-aware RFC3339 strings, forming
 
 This example represents two fully observed minutes at 4 kW. Null estimates mean insufficient observed duration; a supported zero remains zero.
 
-`GET /api/analytics/history` additionally accepts `interval=auto|1m|5m|15m|30m|1h|6h|1d` and `max_points` (default 1,500, maximum 2,000). An explicit interval that cannot fit the output bound returns 422, rather than silently changing it.
+`GET /api/analytics/history` additionally accepts `interval=auto|1m|5m|15m|30m|1h|6h|1d` and `max_points` (default 1,500, maximum 4,000). An explicit interval that cannot fit the output bound returns 422, rather than silently changing it.
 
-History returns equal-length columnar arrays: bucket start/end Unix seconds, observed-time mean W, sampled peak W/time, trailing 15-minute W, observed duration, bucket coverage and rolling-window coverage. Missing values are null. Buckets are UTC aligned; fixed `1d` chart buckets are distinct from local-calendar daily peaks.
+History returns equal-length columnar arrays: bucket start/end Unix seconds, observed-time mean W, sampled peak W/time, trailing 15-minute W, observed duration, bucket coverage and rolling-window coverage. Missing values are null. Recent buckets are UTC aligned; fixed `1d` chart buckets are distinct from local-calendar daily peaks.
+
+Expired raw data requires at least five-minute resolution. Daily archives require
+`auto`/`1d` and the frozen archive calendar timezone for summaries. Responses expand
+endpoints to retained boundaries, report actual `from`/`to`, and include warnings.
+Daily chart buckets follow the archive timezone and may be 23/25 hours; inspect
+`bucket_alignment` and actual bucket endpoints. Trailing 15-minute demand in daily
+archives is null (rolling coverage is zero) and carries an unavailability warning.
+
+`GET /api/storage` accepts optional `device_id` and returns deployment policy,
+capacity including WAL/SHM/journals, retention watermarks, recovery progress and up
+to 100 unresolved historical windows (timestamps in microseconds). SSE health also
+exposes `storage_budget_bytes`, `storage_paused`, maintenance status, recovery
+cursor/target/counts, and separate last-attempt/success/store times. Collection
+can report `polling_state=storage_paused` and `storage_state=paused`.
 
 The detailed [methodology](analytics-methodology.md) defines integrations, clipping, gaps and rolling evaluation times.
 

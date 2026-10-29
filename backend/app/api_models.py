@@ -40,10 +40,14 @@ class Connectivity(BaseModel):
 
 
 class Health(BaseModel):
-    polling_state: Literal["stopped", "running", "backoff", "auth_error", "configuration_error"]
+    polling_state: Literal[
+        "stopped", "running", "backoff", "auth_error", "configuration_error", "storage_paused"
+    ]
     telemetry_state: Literal["missing", "fresh", "stale"]
-    storage_state: Literal["ok", "error"]
+    storage_state: Literal["ok", "error", "paused"]
     last_success_at: str | None
+    last_attempt_at: str | None
+    last_stored_at: str | None
     last_read_at: str | None
     next_attempt_at: str | None
     consecutive_failures: int
@@ -52,6 +56,15 @@ class Health(BaseModel):
     disk_free_bytes: int | None
     database_bytes: int | None
     low_disk: bool
+    storage_budget_bytes: int
+    storage_paused: bool
+    maintenance_error: str | None
+    last_maintenance_at: str | None
+    recovery_pending: bool
+    recovery_cursor_at: str | None
+    recovery_target_at: str | None
+    recovery_gap_count: int
+    recovery_error: str | None
 
 
 class LiveReading(BaseModel):

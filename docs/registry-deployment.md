@@ -2,6 +2,11 @@
 
 GitHub Actions builds and publishes the application so the Pi only downloads an image. No Git, Node, Python development tools or Buildx are needed on the Pi. Docker Standalone, Portainer, 64-bit ARM64 Linux, local persistent storage and outbound HTTPS access to GHCR are required.
 
+**Storage upgrade gate:** the current stacks require a dedicated bounded data
+filesystem. Complete [storage preparation and database migration](storage-management.md)
+before pulling/redeploying this version. The ordinary-directory examples below
+assume that bounded filesystem is already mounted at `ENERGY_ROOT/data`.
+
 ## Build and publication
 
 The `Verify` workflow runs backend checks, browser scenarios and an AMD64/ARM64 container build. Only after **both verification jobs succeed**, a push to `main` publishes to:

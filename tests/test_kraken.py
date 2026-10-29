@@ -69,7 +69,8 @@ async def test_graphql_throttle_and_cooldown() -> None:
         await client.close()
 
 
-async def test_one_authentication_retry() -> None:
+@pytest.mark.parametrize("graphql", [False, True])
+async def test_one_authentication_retry(graphql: bool) -> None:
     tokens, queries = 0, 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -89,13 +90,80 @@ async def test_one_authentication_retry() -> None:
                 },
             )
         queries += 1
+        if graphql:
+            return httpx.Response(
+                200,
+                json={"errors": [{"extensions": {"errorCode": "KT-CT-1143"}}]},
+            )
         return httpx.Response(401)
 
     client = Kraken(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     try:
-        with pytest.raises(KrakenError):
+        with pytest.raises(KrakenError) as exc:
             await client.authenticated("secret", "query Test{}", {})
+        assert exc.value.code == "token_rejected" and exc.value.auth
         assert (tokens, queries) == (2, 2)
+    finally:
+        await client.close()
+
+
+async def test_graphql_invalid_credential_renews_token_and_recovers_telemetry() -> None:
+    tokens = 0
+    credentials: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal tokens
+        body = json.loads(request.content)
+        if "ObtainToken" in body["query"]:
+            tokens += 1
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "obtainKrakenToken": {
+                            "token": f"token-{tokens}",
+                            "payload": {"exp": time.time() + 3600},
+                        }
+                    }
+                },
+            )
+        credentials.append(request.headers["Authorization"])
+        if len(credentials) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "errors": [
+                        {
+                            "extensions": {
+                                "errorType": "AUTHORIZATION",
+                                "errorCode": "KT-CT-1143",
+                            }
+                        }
+                    ],
+                    "data": {"smartMeterTelemetry": None},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "smartMeterTelemetry": [{"readAt": "2026-10-29T22:00:00Z", "demand": 4000}]
+                }
+            },
+        )
+
+    client = Kraken(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    try:
+        await client.token("secret")
+        rows = await client.telemetry(
+            "secret",
+            "test-device",
+            "2026-10-29T21:59:00Z",
+            "2026-10-29T22:01:00Z",
+        )
+        assert rows == [{"readAt": "2026-10-29T22:00:00Z", "demand": 4000}]
+        assert tokens == 2
+        assert credentials == ["JWT token-1", "JWT token-2"]
     finally:
         await client.close()
 

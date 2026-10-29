@@ -1,3 +1,4 @@
+import json
 from bisect import bisect_left, bisect_right
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, time, timedelta
@@ -26,8 +27,8 @@ class Rebuilding(Exception):
 
 def bounds(start: str, end: str) -> tuple[int, int]:
     left, right = timestamp_us(start), timestamp_us(end)
-    if left < 0 or right <= left or right - left > 366 * 86400_000_000:
-        raise ValueError("Range must be positive, after 1970 and at most 366 days")
+    if left < 0 or right <= left or right - left > 3653 * 86400_000_000:
+        raise ValueError("Range must be positive, after 1970 and at most 3653 days")
     return left, right
 
 
@@ -36,8 +37,8 @@ def slots(start: int, end: int, step: int) -> list[tuple[int, int]]:
 
 
 def interval_for(start: int, end: int, interval: str, maximum: int) -> int:
-    if not 1 <= maximum <= 2000:
-        raise ValueError("max_points must be between 1 and 2000")
+    if not 1 <= maximum <= 4000:
+        raise ValueError("max_points must be between 1 and 4000")
     for name, seconds in INTERVALS.items():
         if interval not in ("auto", name):
             continue
@@ -74,6 +75,49 @@ class Analytics:
         row = await one(conn, "SELECT data_version FROM devices WHERE device_id=?", (device,))
         return str(device), int(row[0])
 
+    async def retained_range(
+        self,
+        conn: aiosqlite.Connection,
+        device: str,
+        start: int,
+        end: int,
+        timezone: str | None = None,
+    ) -> tuple[int, int, dict[str, Any], list[str]]:
+        state = await self.store.retention(conn, device)
+        warnings: list[str] = []
+        original = (start, end)
+        if start < state["five_before_us"]:
+            archive_zone = state["archive_timezone"] or "UTC"
+            if timezone is not None and timezone != archive_zone:
+                raise ValueError(
+                    f"Daily archives use {archive_zone}; request that calendar timezone"
+                )
+            zone = ZoneInfo(archive_zone)
+
+            def midnight(value: int, ceiling: bool) -> int:
+                date = datetime.fromisoformat(iso(value)).astimezone(zone).date()
+                floor = timestamp_us(datetime.combine(date, time(), zone).isoformat())
+                if ceiling and value != floor:
+                    floor = timestamp_us(
+                        datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
+                    )
+                return floor
+
+            start = midnight(start, False)
+            # Use whole local days across mixed daily/five-minute ranges too.
+            end = midnight(end, True)
+            warnings.append(f"Daily archived resolution; calendar alignment: {archive_zone}")
+        elif start < state["raw_before_us"]:
+            start = start // BUCKET_US * BUCKET_US
+            if end < state["raw_before_us"]:
+                end = (end + BUCKET_US - 1) // BUCKET_US * BUCKET_US
+            warnings.append("Raw readings expired; minimum historical resolution is five minutes")
+        if (start, end) != original:
+            warnings.append("Requested range expanded to retained bucket boundaries; see from/to")
+        if start < state["expired_before_us"]:
+            warnings.append("Some requested history has expired under the retention policy")
+        return start, end, state, warnings
+
     async def scan(
         self,
         conn: aiosqlite.Connection,
@@ -82,6 +126,18 @@ class Analytics:
         end: int,
         budget: list[int],
     ) -> AsyncIterator[tuple[int, Metrics]]:
+        state = await self.store.retention(conn, device)
+        async with conn.execute(
+            "SELECT * FROM daily_archive WHERE device_id=? AND start_us<? AND end_us>? ORDER BY start_us",
+            (device, end, start),
+        ) as archive:
+            async for row in archive:
+                if start > row["start_us"] or end < row["end_us"]:
+                    raise ValueError("Daily archives require whole calendar-day boundaries")
+                yield int(row["start_us"]), Metrics(**json.loads(row["metrics_json"]))
+        start = max(start, int(state["five_before_us"]))
+        if start >= end:
+            return
         left = start // BUCKET_US * BUCKET_US
         sql = """
         WITH keys AS (
@@ -107,11 +163,18 @@ class Analytics:
                     a, b = max(start, bucket), min(end, bucket + BUCKET_US)
                     if (
                         row["dirty"] is not None
-                        or row["algorithm_version"] != ALGORITHM_VERSION
-                        or row["a0"] is None
+                        or (
+                            row["algorithm_version"] != ALGORITHM_VERSION
+                            and bucket >= state["raw_before_us"]
+                        )
+                        or any(row[f"a{j}"] is None for j in range(3))
                         or a != bucket
                         or b != bucket + BUCKET_US
                     ):
+                        if bucket < state["raw_before_us"]:
+                            raise ValueError(
+                                "Archived five-minute data requires whole bucket boundaries"
+                            )
                         if (
                             row["dirty"] is not None
                             or row["algorithm_version"] != ALGORITHM_VERSION
@@ -121,20 +184,7 @@ class Analytics:
                                 raise Rebuilding("Historical rollups are rebuilding; retry shortly")
                         yield bucket, await self.store.raw_metrics(conn, device, a, b)
                     else:
-                        yield (
-                            bucket,
-                            Metrics(
-                                observed_us=row["observed_us"],
-                                energy_ws=row["import_watt_seconds"],
-                                samples=row["sample_count"],
-                                invalid=row["invalid_sample_count"],
-                                peak_mw=row["peak_import_mw"],
-                                peak_at=row["peak_at_us"],
-                                above=[row[f"a{j}"] for j in range(3)],
-                                load=[row[f"l{j}"] for j in range(3)],
-                                excess=[row[f"e{j}"] for j in range(3)],
-                            ),
-                        )
+                        yield bucket, self.store.rollup_metrics(row)
 
     async def aggregate(
         self,
@@ -162,6 +212,13 @@ class Analytics:
         budget = [120]
         async with self.store.read() as conn:
             device, version = await self.device(conn, selected)
+            start, end, _, warnings = await self.retained_range(
+                conn,
+                device,
+                start,
+                end,
+                timezone,
+            )
             date = datetime.fromisoformat(iso(start)).astimezone(zone).date()
             left = start
             while left < end:
@@ -200,9 +257,8 @@ class Analytics:
             "thresholds": thresholds,
             "daily_peaks": days,
             "method": METHOD,
-            "warnings": ["Incomplete telemetry coverage"]
-            if total.observed_us < end - start
-            else [],
+            "warnings": warnings
+            + (["Incomplete telemetry coverage"] if total.observed_us < end - start else []),
         }
 
     async def history(
@@ -231,6 +287,34 @@ class Analytics:
         budget = [120]
         async with self.store.read() as conn:
             device, version = await self.device(conn, selected)
+            start, end, retained, warnings = await self.retained_range(conn, device, start, end)
+            daily = start < retained["five_before_us"]
+            if daily:
+                if interval not in ("auto", "1d"):
+                    raise ValueError("Daily archives only support interval=auto or 1d")
+                step = 86_400_000_000
+            elif start < retained["raw_before_us"] and step < BUCKET_US:
+                if interval != "auto":
+                    raise ValueError(
+                        "Raw readings expired; request an interval of at least five minutes"
+                    )
+                step = BUCKET_US
+            chart_slots = slots(start, end, step)
+            if daily:
+                chart_slots = []
+                zone = ZoneInfo(retained["archive_timezone"] or "UTC")
+                a = start
+                while a < end:
+                    date = datetime.fromisoformat(iso(a)).astimezone(zone).date()
+                    b = timestamp_us(
+                        datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
+                    )
+                    chart_slots.append((a, min(b, end)))
+                    a = b
+            if len(chart_slots) > maximum:
+                raise ValueError(
+                    "Range exceeds max_points at retained resolution; request a shorter range"
+                )
             raw = (
                 await self.store.raw_rows(conn, device, start - 900_000_000, end)
                 if step < BUCKET_US
@@ -245,9 +329,13 @@ class Analytics:
                     )
                 return await self.aggregate(conn, device, a, b, budget)
 
-            for a, b in slots(start, end, step):
+            for a, b in chart_slots:
                 m = await metric(a, b)
-                rolling = await metric(b - 900_000_000, b)
+                rolling = (
+                    Metrics()
+                    if b - 900_000_000 < retained["five_before_us"]
+                    else await metric(b - 900_000_000, b)
+                )
                 values: tuple[float | None, ...] = (
                     a / 1_000_000,
                     b / 1_000_000,
@@ -267,9 +355,11 @@ class Analytics:
             "from": iso(start),
             "to": iso(end),
             "interval_seconds": step // 1_000_000,
-            "bucket_alignment": "UTC",
+            "bucket_alignment": retained["archive_timezone"] if daily else "UTC",
             "rolling_evaluation": "bucket_end",
             "series": series,
             "method": METHOD,
-            "warnings": ["Peaks are sampled grid import, not continuous household load"],
+            "warnings": warnings
+            + ["Peaks are sampled grid import, not continuous household load"]
+            + (["Trailing 15-minute demand is unavailable in daily archives"] if daily else []),
         }

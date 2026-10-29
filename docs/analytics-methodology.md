@@ -38,8 +38,16 @@ Trailing 15-minute demand is the import integral over the previous 900 seconds d
 
 ## Storage and display
 
-Raw readings are authoritative and retained indefinitely, isolated by device/native timestamp. Corrected/late readings invalidate adjacent affected rollups. Five-minute caches contain observed duration, import integral, sampled peak and threshold duration/energy. Rebuilds are atomic and versioned.
+Recent raw readings are authoritative and isolated by device/native timestamp.
+Corrected/late readings invalidate adjacent affected retained rollups. Five-minute
+summaries contain observed duration, import integral, sampled peak and threshold
+duration/energy. Rebuilds are atomic and versioned. After raw expiry these summaries
+are durable records, not disposable caches; older history is reduced to local-day
+archives. See [retention, alignment and archive limitations](storage-management.md).
 
-For large ranges, APIs sum exact cached integrals and recompute partial boundaries from raw readings. Means are weighted by observed duration; maxima are not averaged. Dirty caches are not served as current.
+For large ranges, APIs sum exact retained integrals and recompute partial boundaries
+only where raw readings remain. Otherwise endpoints expand to complete retained
+buckets/days and responses report actual bounds and warnings. Means are weighted
+by observed duration; maxima are not averaged. Dirty caches are not served as current.
 
 The browser shows coverage prominently, breaks unsupported lines, suppresses incomplete bucket-mean lines and displays sampled peaks separately. Custom date inputs and chart axis labels use the browser timezone; daily summaries use the configured timezone, shown explicitly. The 3.68 kW preset is a comparison reference, not a G98/G99 connection decision.

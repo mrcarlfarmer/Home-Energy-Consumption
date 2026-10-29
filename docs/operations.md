@@ -2,9 +2,22 @@
 
 ## Collection and troubleshooting
 
-Polls use a three-minute overlap and at most one hour of recent recovery after an outage. All rows are deduplicated by device/native timestamp. Older missing intervals remain visible and are not replaced by zero or fabricated historical data.
+Live polls request a recent three-minute window. Persistent, rate-governed backfill
+attempts fifteen-minute historical chunks within the configured lookback (one day
+by default), alternating with live requests. All rows are deduplicated by
+device/native timestamp. Unresolved/partial intervals remain visible and are not
+replaced by zero or fabricated historical data.
+See [storage management](storage-management.md) for pause/recovery semantics.
 
 Token refresh is single-flight and proactive. A rejected token gets one renewal/operation retry. Persistent auth/configuration failures stop automatic retries until settings change or a successful test of the saved credentials resumes already-enabled polling. HTTP and GraphQL throttling share cooldowns with connectivity tests. Transient failures use bounded exponential backoff/jitter and respect vendor retry timing.
+
+Kraken's GraphQL `KT-CT-1143` (invalid Authorization credential) is treated as a
+rejected access token, including when returned with HTTP 200: renew once and retry
+the operation, rather than stopping immediately as a configuration error. On older
+images showing `graphql_KT-CT-1143`, test the saved credentials in Settings to resume
+already-enabled collection. Confirm that the last measurement timestamp advances;
+a displayed demand value alone can be a stale stored reading. Select a wider history
+range to distinguish missing recent collection from missing stored history.
 
 Interpret health indicators separately:
 
@@ -46,12 +59,14 @@ Backups contain the Octopus API key, administrator hash and session metadata. St
 Use SQLite's backup API, not a plain copy of an actively WAL-backed database. For a resource-bounded, quiesced backup:
 
 ```sh
+# Provision this on separate protected, capacity-limited backup storage.
+sudo install -d -m 700 -o 10001 -g 10001 /srv/home-energy-backups
 docker compose stop energy
-docker compose run --rm --no-deps energy energy-admin backup --output /data/backups/energy-2026-10-03.sqlite3
+docker compose run --rm --no-deps -v /srv/home-energy-backups:/backup energy energy-admin backup --output /backup/energy-2026-10-03.sqlite3
 docker compose start energy
 ```
 
-The command refuses to overwrite an existing file and runs a `quick_check` on the resulting snapshot. Choose a new filename for each backup. Move/copy the completed backup to a separate protected disk; a backup on the same physical device does not protect against device failure. The collection pause is a real gap and will only recover within Kraken's available lookback.
+The command refuses to overwrite an existing file and runs a `quick_check` on the resulting snapshot. Choose a new filename for each backup. Enforce a separate backup quota/finite rotation; do not put full-size backups inside the bounded data filesystem. Move/copy completed backups to a separate protected disk; a backup on the same physical device does not protect against device failure. The collection pause is a real gap and will only recover within Kraken's available lookback.
 
 An online `docker compose exec ... backup` is supported by SQLite, but it adds another Python process to the container memory budget. Measure headroom first; the quiesced procedure is the safe default.
 
@@ -67,9 +82,16 @@ Do not use `docker compose down -v` for ordinary troubleshooting: it deletes the
 
 ## Rollups and disk space
 
-Raw history is never automatically deleted. A 365-day stream can contain 3.15 million raw rows plus 105,120 five-minute base rollups and three threshold rows per bucket. Measure actual bytes on your data and leave capacity for growth, backups and WAL/checkpoint activity.
+Raw history is automatically summarized before expiry: defaults are 30 days raw,
+396 days five-minute and 3653 days daily. The shipped stacks require a dedicated
+bounded filesystem. Follow [storage preparation and migration](storage-management.md)
+before upgrading an existing deployment.
 
-The periodic maintenance worker rebuilds dirty buckets and checkpoints passively. Long analytical reads have deadlines so they cannot pin WAL indefinitely. The journal-size limit is not a strict cap on a currently active WAL.
+The periodic maintenance worker rebuilds dirty buckets, performs transactional
+retention and attempts WAL truncation. Long analytical reads have deadlines.
+The journal-size limit is not a strict cap on a currently active WAL; the dedicated
+filesystem is the hard storage boundary. Capacity checks pause ingestion before it
+is exhausted, without deleting unsummarized data.
 
 To regenerate caches explicitly, prefer an offline maintenance window:
 
@@ -79,7 +101,10 @@ docker compose run --rm --no-deps energy energy-admin rebuild
 docker compose start energy
 ```
 
-If storage fills or becomes read-only/corrupt, the application reports an error; it does not delete raw data or recreate the database. Check free disk and volume permissions before restarting. Repair/restore using a protected copy, not an in-place destructive experiment.
+If storage fills or becomes read-only/corrupt, the application reports an error;
+it does not delete unsummarized data or recreate the database. Check free disk,
+maintenance health and volume permissions before restarting. Repair/restore using
+a protected copy, not an in-place destructive experiment.
 
 ## Memory and performance checks
 
