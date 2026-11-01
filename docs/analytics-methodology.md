@@ -26,6 +26,14 @@ For threshold `T`:
 
 Demand exactly at the rating does not exceed it. Unevenly spaced readings are duration-weighted, not counted equally. If there is no observed duration, averages/percentages/energy are null rather than a misleading zero. Counters are cumulative and are never summed into energy.
 
+The dashboard's **Time above 6 kW** tile shows total supported duration, all import
+energy while above 6 kW, and excess energy beyond 6 kW for the selected meter and
+window. Duration is displayed in hours, minutes and seconds; energy is in kWh.
+These totals use the same summary as the inverter comparison table, including
+retained-range alignment. With no observed duration, all three values are
+unavailable; observed periods with no exceedance show zero. Missing periods are
+not included or extrapolated.
+
 At 4 kW for two fully observed minutes, the 3.68 kW preset gives 100% time above, 0.133333333 kWh while above and 0.010666667 kWh excess.
 
 Threshold measures are calculated **before** chart downsampling. Averaging a 6 kW spike into a sub-3.68 kW chart bucket must not hide the exceedance. The three predefined threshold rollups retain these integrals independently of the display means.

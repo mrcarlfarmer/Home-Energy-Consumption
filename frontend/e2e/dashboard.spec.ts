@@ -14,6 +14,9 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#thresholds tr")).toHaveCount(3);
   await expect(page.locator("#chart canvas").first()).toBeVisible();
   await expect(page.locator("#peak")).toHaveText("4 kW");
+  await expect(page.locator("#above-6kw-time")).toHaveText("0 s");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("0 kWh");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("0 kWh");
   await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.locator("#key-status")).toContainText("API key saved");
   expect(await page.content()).not.toContain("fixture-only-key");
@@ -46,6 +49,51 @@ test("protected endpoints, origin checks and missing data presentation", async (
   await expect(page.locator('[data-minutes][aria-pressed="true"]')).toHaveCount(0);
   await expect(page.locator("#coverage")).toHaveText("0%");
   await expect(page.locator("#energy")).toContainText("Unavailable");
+  await expect(page.locator("#above-6kw-time")).toHaveText("Unavailable");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("Unavailable");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("Unavailable");
+});
+
+test("6 kW tile uses summary totals and updates with the selected window", async ({ page }) => {
+  let seconds = 3661.25;
+  let energy = 8.125;
+  let excess = 2.023;
+  await page.route("**/api/analytics/summary?**", async route => {
+    const response = await route.fetch();
+    const summary = await response.json();
+    summary.observed_seconds = 100000;
+    summary.thresholds.reverse();
+    const threshold = summary.thresholds.find((value: { threshold_w: number }) => value.threshold_w === 6000);
+    threshold.seconds_above = seconds;
+    threshold.energy_when_above_kwh = energy;
+    threshold.excess_energy_kwh = excess;
+    await route.fulfill({ response, json: summary });
+  });
+  await page.goto("http://127.0.0.1:8766/");
+  await expect(page.locator("#above-6kw-time")).toHaveText("1 h 1 min 1.25 s");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("8.125 kWh");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("2.023 kWh");
+  seconds = 90061;
+  energy = 200;
+  excess = 50;
+  await page.getByRole("button", { name: "7 days", exact: true }).click();
+  await expect(page.locator("#above-6kw-time")).toHaveText("25 h 1 min 1 s");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("200 kWh");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("50 kWh");
+  seconds = 60;
+  energy = 0.125;
+  excess = 0.025;
+  await page.locator("#from").fill("2026-01-01T00:00");
+  await page.locator("#to").fill("2026-01-02T00:00");
+  await page.getByRole("button", { name: "Apply custom range" }).click();
+  await expect(page.locator("#above-6kw-time")).toHaveText("1 min");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("0.125 kWh");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("0.025 kWh");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.locator(".threshold-card")).toBeVisible();
+  const bounds = await page.locator(".threshold-card").boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
 });
 
 test("live polling controls persist and synchronize without saving credential drafts", async ({ page }) => {
