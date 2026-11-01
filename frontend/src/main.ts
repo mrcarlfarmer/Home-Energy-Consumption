@@ -24,6 +24,16 @@ function text(id: string, value: string): void { element(id).textContent = value
 function number(value: number | null, digits = 2): string {
   return value === null ? "Unavailable" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
+function duration(seconds: number): string {
+  const total = Math.round(seconds * 100) / 100;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return [
+    hours ? `${number(hours, 0)} h` : "",
+    minutes ? `${minutes} min` : "",
+    total % 60 || !total ? `${number(total % 60)} s` : "",
+  ].filter(Boolean).join(" ");
+}
 function showError(error: unknown): void {
   if (error instanceof DOMException && error.name === "AbortError") return;
   if (error instanceof ApiError && error.status === 401 && document.getElementById("dashboard")) {
@@ -146,9 +156,14 @@ async function refresh(): Promise<void> {
     const summary = await api<Summary>(`/api/analytics/summary?${query}&timezone=${encodeURIComponent(timezone)}`, undefined, controller.signal);
     const history = await api<History>(`/api/analytics/history?${query}&interval=auto&max_points=${archived ? 4000 : 1500}`, undefined, controller.signal);
     if (current !== generation || controller.signal.aborted) return;
+    const above6kw = summary.thresholds.find(value => value.threshold_w === 6000);
+    if (!above6kw) throw new Error("Analysis is missing the 6 kW threshold.");
     text("coverage", `${number(summary.coverage_pct)}%`);
     text("energy", `${number(summary.import_energy_kwh)} kWh`);
     text("peak", summary.sampled_peak_w === null ? "Unavailable" : `${number(summary.sampled_peak_w / 1000)} kW`);
+    text("above-6kw-time", summary.observed_seconds > 0 ? duration(above6kw.seconds_above) : "Unavailable");
+    text("above-6kw-energy", above6kw.energy_when_above_kwh === null ? "Unavailable" : `${number(above6kw.energy_when_above_kwh, 3)} kWh`);
+    text("above-6kw-excess", above6kw.excess_energy_kwh === null ? "Unavailable" : `${number(above6kw.excess_energy_kwh, 3)} kWh`);
     text("analysis-status", `${number(summary.observed_seconds / 3600)} observed hours of ${number(summary.requested_seconds / 3600)}. Chart buckets: ${history.interval_seconds / 60} min. Calendar days: ${timezone}. Range: ${new Date(summary.from).toLocaleString()} - ${new Date(summary.to).toLocaleString()}. Retention: raw ${storage.policy.raw_days} days, five-minute ${storage.policy.five_minute_days} days, daily ${storage.policy.daily_days} days. ${[...new Set([...summary.warnings, ...history.warnings])].join(". ")}`);
     const thresholdBody = element<HTMLTableSectionElement>("thresholds");
     thresholdBody.replaceChildren();
@@ -253,7 +268,9 @@ async function renderDashboard(): Promise<void> {
     <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
     <article><span class="channel">CH.02</span><p>Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
     <article><span class="channel">CH.03</span><p>Sampled peak</p><strong id="peak">--</strong><small>Highest observed reading</small></article>
-    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small>Within the selected window</small></article></section>
+    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small>Within the selected window</small></article>
+    <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
+    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Observed within the selected window</small></article></section>
     <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
     <div class="section-heading"><h3>Polling</h3><button id="toggle-polling" type="button">Start polling</button></div>
