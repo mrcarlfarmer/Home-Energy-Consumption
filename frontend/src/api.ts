@@ -5,6 +5,17 @@ export interface Config {
   display_timezone: string; devices: Device[];
   home_assistant_url: string | null; home_assistant_entity: string | null;
   home_assistant_enabled: boolean; has_home_assistant_token: boolean;
+  tariff_pricing_enabled: boolean;
+}
+export interface TariffStatus {
+  enabled: boolean; state: string; error_code: string | null;
+  fetched_at: string | null; from: string | null; to: string | null;
+  tariff_name: string | null; tariff_code: string | null; schedule: string | null;
+  rates: { from: string; to: string; pence_per_kwh: number; band: string }[];
+  warnings: string[];
+}
+export interface RecoveryStatus {
+  device_id: string; from: string; to: string; state: "pending";
 }
 export interface Snapshot {
   device_id: string | null; data_version: number;
@@ -34,7 +45,7 @@ export interface Metrics {
 }
 export interface StorageStatus {
   policy: { raw_days: number; five_minute_days: number; daily_days: number; recovery_days: number };
-  retention: { five_before_us: number; archive_timezone: string | null } | null;
+  retention: { raw_before_us: number; five_before_us: number; archive_timezone: string | null } | null;
 }
 export interface Summary extends Metrics {
   device_id: string;
@@ -46,8 +57,19 @@ export interface Summary extends Metrics {
     energy_when_above_kwh: number | null; excess_energy_kwh: number | null;
   }[];
   daily_peaks: (Metrics & { date: string })[];
+  pricing: {
+    enabled: boolean; available: boolean;
+    energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
+    price_coverage_pct: number | null; priced_seconds_above: number;
+    fetched_at: string | null; warning: string;
+  };
+}
+export interface DailyPeaks {
+  timezone: string; from: string; to: string; warnings: string[];
+  daily_peaks: (Metrics & { date: string })[];
 }
 export interface History {
+  from: string; to: string;
   interval_seconds: number;
   bucket_alignment: string; warnings: string[];
   method: { power_basis: string };

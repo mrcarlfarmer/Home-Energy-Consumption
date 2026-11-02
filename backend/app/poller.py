@@ -158,10 +158,19 @@ class Poller:
         if state is None or state["status"] != "pending":
             await self.collect(config)
             return
-        start = int(state["cursor_us"])
-        end = min(start + 900_000_000, int(state["target_us"]))
-        if end <= start:
+        # Skip already supported history without spending another upstream request.
+        for _ in range(96):
+            start = int(state["cursor_us"])
+            end = min(start + 900_000_000, int(state["target_us"]))
+            async with self.store.read() as conn:
+                metrics = await self.store.raw_metrics(conn, device, start, end)
+            if metrics.observed_us < end - start:
+                break
             await self.store.finish_recovery_chunk(device, start, end, config["revision"], None)
+            state = await self.store.recovery(device)
+            if state is None or state["status"] != "pending":
+                return
+        else:
             return
         try:
             self.health["last_attempt_at"] = iso(now_us())
@@ -197,18 +206,15 @@ class Poller:
         changed = await self.store.ingest(device, readings, config["revision"])
         if changed:
             self.health["last_stored_at"] = iso(now_us())
-        valid = sorted({r.read_at_us for r in readings if r.demand_mw is not None})
-        reason = None
-        if not readings:
-            reason = "empty"
-        elif (
-            not valid
-            or valid[0] > start + 30_000_000
-            or valid[-1] < end - 30_000_000
-            or any(b - a > 30_000_000 for a, b in zip(valid, valid[1:], strict=False))
-            or any(r.demand_mw is None for r in readings)
-        ):
-            reason = "partial"
+        async with self.store.read() as conn:
+            metrics = await self.store.raw_metrics(conn, device, start, end)
+        reason = (
+            None
+            if metrics.observed_us == end - start
+            else "empty"
+            if not readings and not metrics.observed_us
+            else "partial"
+        )
         await self.store.finish_recovery_chunk(device, start, end, config["revision"], reason)
         self.health.update(
             error_code=None,

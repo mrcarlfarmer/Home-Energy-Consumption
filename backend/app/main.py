@@ -24,21 +24,37 @@ from app.analytics.service import Analytics, Rebuilding, bounds
 from app.api_models import (
     AuthState,
     Connectivity,
+    DailyPeaks,
     History,
     HomeAssistantConnectivity,
     PublicConfig,
+    RecoveryStatus,
     Snapshot,
     Summary,
+    TariffStatus,
 )
 from app.auth import COOKIE, SESSION_SECONDS, Auth, Session, hash_password
 from app.db.store import Conflict, Store, one
 from app.ev_collector import EVCollector
 from app.home_assistant import HomeAssistant, HomeAssistantError
 from app.kraken import Kraken, KrakenError
-from app.models import ConfigUpdate, HomeAssistantTest, Login, Reading, TestConfig, iso, now_us
+from app.models import (
+    ConfigUpdate,
+    HomeAssistantTest,
+    Login,
+    Reading,
+    RecoveryRequest,
+    TariffRefresh,
+    TestConfig,
+    iso,
+    now_us,
+    timestamp_us,
+)
 from app.poller import Poller
 from app.settings import Settings
+from app.storage import StoragePressure
 from app.streaming import Hub
+from app.tariffs import TariffPricing
 
 log = logging.getLogger(__name__)
 
@@ -141,9 +157,12 @@ def create_app(
     poller, analytics = Poller(store, kraken, hub), Analytics(store)
     home_assistant = home_client or HomeAssistant()
     ev_collector = EVCollector(store, home_assistant, poller.publish)
+    tariff_pricing = TariffPricing(store, kraken, poller.publish)
     poller.ev_health = ev_collector.health
     analysis_lock, test_lock = asyncio.Lock(), asyncio.Lock()
     next_test = 0.0
+    recovery_request_lock = asyncio.Lock()
+    next_recovery_request = 0.0
     anonymous_csrf = secrets.token_urlsafe(32)
 
     @asynccontextmanager
@@ -188,6 +207,7 @@ def create_app(
                     asyncio.create_task(store.maintenance()),
                     asyncio.create_task(poller.health_timer()),
                     asyncio.create_task(ev_collector.run()),
+                    asyncio.create_task(tariff_pricing.run()),
                 ]
                 if settings.auth_required:
                     tasks.append(asyncio.create_task(app.state.auth.watch_password()))
@@ -213,6 +233,7 @@ def create_app(
     )
     app.state.store, app.state.poller, app.state.hub = store, poller, hub
     app.state.ev_collector = ev_collector
+    app.state.tariff_pricing = tariff_pricing
     app.add_middleware(SecurityMiddleware, settings=settings)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -310,7 +331,78 @@ def create_app(
             raise Problem(422, "invalid_config", str(exc)) from exc
         await poller.reconfigure()
         await ev_collector.reconfigure()
+        await tariff_pricing.reconfigure()
         return await store.public_config()
+
+    @app.get("/api/tariff", response_model=TariffStatus)
+    async def tariff_status(
+        session: SessionDep,
+        start: Annotated[str | None, Query(alias="from")] = None,
+        to: str | None = None,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            if (start is None) != (to is None):
+                raise ValueError("Supply both from and to for historical tariff indicators")
+            interval = bounds(start, to) if start is not None and to is not None else None
+        except ValueError as exc:
+            raise Problem(422, "invalid_tariff_range", str(exc)) from exc
+        return await tariff_pricing.status(interval, device_id)
+
+    @app.post("/api/recovery", response_model=RecoveryStatus, status_code=202)
+    async def request_recovery(data: RecoveryRequest, session: SessionDep) -> dict[str, Any]:
+        nonlocal next_recovery_request
+        if recovery_request_lock.locked():
+            raise Problem(429, "recovery_busy", "A historical recovery request is being saved", 1)
+        async with recovery_request_lock:
+            remaining = next_recovery_request - asyncio.get_running_loop().time()
+            if remaining > 0:
+                raise Problem(
+                    429,
+                    "recovery_throttled",
+                    "Recovery was requested recently",
+                    math.ceil(remaining),
+                )
+            try:
+                start, end = bounds(data.from_, data.to)
+                if (await store.capacity())["storage_paused"]:
+                    raise StoragePressure("Storage capacity exhausted")
+                result = await store.request_recovery(
+                    data.device_id, start, end, data.expected_revision
+                )
+            except Conflict as exc:
+                raise Problem(409, "config_conflict", str(exc)) from exc
+            except ValueError as exc:
+                raise Problem(422, "invalid_recovery_range", str(exc)) from exc
+            except StoragePressure as exc:
+                raise Problem(507, "storage_limit_reached", str(exc)) from exc
+            next_recovery_request = asyncio.get_running_loop().time() + 60
+            await poller.reconfigure()
+            return result
+
+    @app.post("/api/tariff/refresh", response_model=TariffStatus)
+    async def refresh_tariff(data: TariffRefresh, session: SessionDep) -> dict[str, Any]:
+        try:
+            await tariff_pricing.refresh(data.expected_revision)
+        except Conflict as exc:
+            raise Problem(409, "config_conflict", str(exc)) from exc
+        except ValueError as exc:
+            raise Problem(422, "missing_tariff_config", str(exc)) from exc
+        except StoragePressure as exc:
+            raise Problem(507, "storage_limit_reached", str(exc)) from exc
+        except KrakenError as exc:
+            throttled = exc.code in (
+                "tariff_refresh_busy",
+                "tariff_refresh_throttled",
+                "rate_limited",
+            )
+            raise Problem(
+                429 if throttled else 503 if exc.retryable else 422,
+                exc.code,
+                f"Octopus tariff pricing refresh failed: {exc.code.replace('_', ' ')}",
+                math.ceil(exc.delay) if exc.delay else None,
+            ) from exc
+        return await tariff_pricing.status()
 
     @app.post("/api/home-assistant/test", response_model=HomeAssistantConnectivity)
     async def test_home_assistant(data: HomeAssistantTest, session: SessionDep) -> dict[str, Any]:
@@ -528,6 +620,20 @@ def create_app(
         async def operation() -> dict[str, Any]:
             a, b = bounds(start, to)
             return await analytics.history(a, b, interval, max_points, device_id, exclude_ev)
+
+        return await analytical(operation)
+
+    @app.get("/api/analytics/daily-peaks", response_model=DailyPeaks)
+    async def daily_peaks(
+        session: SessionDep,
+        to: str,
+        timezone: str = "Europe/London",
+        device_id: str | None = None,
+        exclude_ev: bool = False,
+    ) -> dict[str, Any]:
+        async def operation() -> dict[str, Any]:
+            end = timestamp_us(to)
+            return await analytics.daily_peaks(end, timezone, device_id, exclude_ev)
 
         return await analytical(operation)
 

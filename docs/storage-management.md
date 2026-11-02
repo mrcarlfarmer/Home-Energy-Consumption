@@ -22,6 +22,16 @@ malformed daily archive. It needs temporary database/WAL headroom. Take a consis
 backup before upgrading; older application versions reject the upgraded schema, so
 rolling back requires restoring that backup.
 
+Schema 6 additionally adds opt-in tariff pricing and its household rate cache.
+Existing telemetry, EV history and collection settings are preserved; pricing
+defaults to disabled. The same backup/rollback requirement applies to upgrades
+from schema 5: older applications reject schema 6.
+
+Schema 7 adds a persisted explicit-recovery marker to the existing recovery
+cursor, preserving previously queued work. Back up before this upgrade too;
+applications supporting only schema 6 or earlier require the matching backup
+for rollback.
+
 ## Prepare a new bounded filesystem on the Pi
 
 Take a consistent backup first, then stop the old container. These commands run on
@@ -102,6 +112,13 @@ Protect backups accordingly. Initial Home Assistant recovery uses
 `APP_RECOVERY_LOOKBACK_DAYS`; a persisted cursor resumes after restart, bounded
 by raw retention and whatever Recorder history Home Assistant still has.
 
+The optional tariff cache shares the same database and capacity checks. Each
+successful refresh atomically replaces rates for the active account/meter over
+at most 31 days back (bounded by raw retention) and two days ahead. Failed refreshes
+retain the previous cache; account/meter changes discard it. It is not a permanent
+ten-year price archive. Rate boundaries that cannot be resolved from retained
+telemetry make costs unavailable, without changing the existing energy summaries.
+
 SQLite's main database is limited to 75% of the budget using `max_page_count`.
 Before ingestion, the app checks total database/sidecar size, filesystem free space,
 and available/reusable SQLite pages. It pauses collection at 90% total usage, below
@@ -180,6 +197,24 @@ reported as unresolved by this recovery attempt, not proof that upstream data ca
 never become available. Rejected/empty/partial chunks are not retried forever.
 No half-hour consumption fallback is fabricated or mixed into demand/peak metrics.
 Storage-paused collection makes no recovery requests until capacity is restored.
+
+**Retrying internal gaps:** the graph's **Recover missing readings** action queues
+an explicit range even when the automatic cursor has already moved beyond its
+holes. Requests require enabled polling and retained raw history, up to 31 days
+back. Unlike initial automatic recovery, an explicitly requested older range is
+not shortened to the default one-day lookback. Pending work is preserved and the
+cursor survives restarts. Already supported fifteen-minute windows are skipped,
+with at most 96 local checks per worker turn; upstream calls remain serialized
+through the same governor and alternate with live collection. There is no promise
+that Octopus still retains every requested reading.
+
+Recovered readings deduplicate and invalidate affected rollups normally. The
+collector assesses coverage from the combined stored/new readings, not only the
+latest response, and reconciles overlapping unresolved-window records. Empty,
+partial or aged-out results stay visible; another explicit request can retry them
+later. The newest three minutes are excluded to avoid repeatedly requesting data
+still being published. Archived five-minute/daily-only history cannot be repaired
+from expired raw data.
 
 `GET /api/storage` (authenticated) exposes policy, capacity, retention watermarks,
 recovery progress/counts and the most recent 100 unresolved windows, per optional
