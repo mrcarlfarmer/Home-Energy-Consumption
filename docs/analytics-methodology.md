@@ -34,9 +34,50 @@ retained-range alignment. With no observed duration, all three values are
 unavailable; observed periods with no exceedance show zero. Missing periods are
 not included or extrapolated.
 
-At 4 kW for two fully observed minutes, the 3.68 kW preset gives 100% time above, 0.133333333 kWh while above and 0.010666667 kWh excess.
+At 8 kW for two fully observed minutes, the 6 kW threshold gives 100% time above, 0.266666667 kWh while above and 0.066666667 kWh excess.
 
-Threshold measures are calculated **before** chart downsampling. Averaging a 6 kW spike into a sub-3.68 kW chart bucket must not hide the exceedance. The three predefined threshold rollups retain these integrals independently of the display means.
+Threshold measures are calculated **before** chart downsampling. Averaging an above-6 kW spike into a below-6 kW chart bucket must not hide the exceedance. The 6 kW rollup retains these integrals independently of the display means.
+
+## EV exclusion
+
+The optional Home Assistant integration reads the Ohme power entity's current
+state and Recorder history. Recorder stores changes, not a uniform thirty-second
+sample stream. For each successfully fetched window, hold a recorded EV value
+until its next change or the window end. The initial history state establishes
+the value at the left boundary; absence of that state leaves initial time unknown.
+`unknown`/`unavailable` states and absent history create unsupported intervals.
+No synthetic ten-second EV readings are fabricated.
+
+For recent collection, cap the window at the current sensor's `last_reported`
+timestamp (falling back to `last_updated`), and require a valid report within two
+minutes. If Home Assistant returns a stale cached REST `last_reported`, a read-only
+template obtains the power and timestamp together from the current state. This
+fallback requires an administrator token; if it is denied, the reading remains
+unknown until it can be verified. Never extend recent coverage from a
+stale/unavailable sensor. Historical Recorder data cannot prove that the
+charger was online throughout every
+unchanged state: unreported outages can leave stale values. This limitation is
+explicit in the adjusted responses.
+
+Intersect supported meter segments with valid EV intervals, split at every EV
+change, and use `max(0, signed_grid_demand - EV_power)` before applying the same
+energy and strict-threshold arithmetic. Grid gap/null rules remain unchanged.
+Coverage and time-above percentages use only jointly usable duration. A known
+zero EV reading supports subtraction; missing EV data does not.
+
+Derived peaks include usable meter readings and supported intersection
+boundaries, so an EV power change within a meter segment cannot hide an adjusted
+peak. Daily summaries, chart buckets and the full-coverage trailing fifteen-minute
+curve share this calculation. The live card remains whole-meter grid demand.
+This is **non-EV grid import**, not total household load when solar/batteries are
+present.
+
+Adjusted metrics are computed from raw readings and retained EV intervals, not
+from pre-averaged grid chart values or by subtracting EV kWh from excess kWh.
+EV history is tied to the configured URL/entity/meter identity, revision-fenced,
+and updated when overlapping history is corrected. It expires with raw retention
+(normally thirty days). Older grid-only five-minute/daily archives remain
+unchanged and are not eligible for EV exclusion.
 
 ## Peaks, windows and calendar days
 
@@ -58,4 +99,4 @@ only where raw readings remain. Otherwise endpoints expand to complete retained
 buckets/days and responses report actual bounds and warnings. Means are weighted
 by observed duration; maxima are not averaged. Dirty caches are not served as current.
 
-The browser shows coverage prominently, breaks unsupported lines, suppresses incomplete bucket-mean lines and displays sampled peaks separately. Custom date inputs and chart axis labels use the browser timezone; daily summaries use the configured timezone, shown explicitly. The 3.68 kW preset is a comparison reference, not a G98/G99 connection decision.
+The browser shows coverage prominently, breaks unsupported lines, suppresses incomplete bucket-mean lines and displays sampled peaks separately. Custom date inputs and chart axis labels use the browser timezone; daily summaries use the configured timezone, shown explicitly. The 6 kW threshold is a comparison reference, not an electrical design or connection-approval decision.

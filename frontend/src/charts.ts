@@ -35,9 +35,11 @@ export class DemandChart {
       ],
       axes: [
         { ...axis },
-        { ...axis, label: "Grid import (W)", size: 65 },
+        { ...axis, label: history.method.power_basis === "nonnegative_grid_import_excluding_ev"
+          ? "Non-EV grid import (W)" : "Grid import (W)", size: 65 },
       ],
     }, [s.bucket_end_epoch_s, means, s.sampled_peak_w, s.rolling_15m_w], this.target);
   }
+  clear(): void { this.plot?.destroy(); this.plot = undefined; }
   destroy(): void { this.observer.disconnect(); this.plot?.destroy(); }
 }

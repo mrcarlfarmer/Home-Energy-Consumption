@@ -1,7 +1,9 @@
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
@@ -9,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 BUCKET_US = 300_000_000
 GAP_US = 30_000_000
-THRESHOLDS = (3680, 5000, 6000)
+THRESHOLDS = (6000,)
 ALGORITHM_VERSION = 1
 
 
@@ -97,6 +99,50 @@ class ConfigUpdate(BaseModel):
     polling_enabled: bool | None = None
     poll_interval_seconds: int | None = Field(default=None, ge=30, le=3600)
     display_timezone: str | None = None
+    home_assistant_url: str | None = Field(default=None, max_length=512)
+    home_assistant_token: SecretStr | None = None
+    home_assistant_entity: str | None = Field(default=None, max_length=255)
+    home_assistant_enabled: bool | None = None
+
+    @field_validator("home_assistant_url")
+    @classmethod
+    def home_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Invalid Home Assistant URL port") from exc
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or any(c.isspace() or ord(c) < 32 for c in value)
+            or "\\" in value
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise ValueError("Enter a Home Assistant HTTP(S) URL without credentials or query")
+        return value.rstrip("/")
+
+    @field_validator("home_assistant_token")
+    @classmethod
+    def home_token(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not re.fullmatch(
+            r"[A-Za-z0-9._~-]{1,4096}", value.get_secret_value()
+        ):
+            raise ValueError("Enter a valid Home Assistant access token (at most 4096 characters)")
+        return value
+
+    @field_validator("home_assistant_entity")
+    @classmethod
+    def home_entity(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"sensor\.[a-z0-9_]+", value):
+            raise ValueError("Enter the Home Assistant power sensor entity ID")
+        return value
 
     @field_validator("active_device_id")
     @classmethod
@@ -138,6 +184,35 @@ class TestConfig(BaseModel):
     @classmethod
     def key(cls, value: SecretStr | None) -> SecretStr | None:
         return ConfigUpdate.key(value)
+
+
+class HomeAssistantTest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    home_assistant_url: str | None = Field(default=None, max_length=512)
+    home_assistant_token: SecretStr | None = None
+    home_assistant_entity: str | None = Field(default=None, max_length=255)
+
+    @field_validator("home_assistant_url")
+    @classmethod
+    def home_url(cls, value: str | None) -> str | None:
+        return ConfigUpdate.home_url(value)
+
+    @field_validator("home_assistant_token")
+    @classmethod
+    def home_token(cls, value: SecretStr | None) -> SecretStr | None:
+        return ConfigUpdate.home_token(value)
+
+    @field_validator("home_assistant_entity")
+    @classmethod
+    def home_entity(cls, value: str | None) -> str | None:
+        return ConfigUpdate.home_entity(value)
+
+
+@dataclass(frozen=True)
+class EVInterval:
+    start: int
+    end: int
+    power_mw: int | None
 
 
 class Login(BaseModel):

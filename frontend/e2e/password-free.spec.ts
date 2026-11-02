@@ -4,7 +4,7 @@ test.use({ baseURL: "http://127.0.0.1:8766" });
 
 test("Carbon Aurora theme and navigation remain usable across screen sizes", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  await expect(page.locator("#thresholds tr")).toHaveCount(1);
   const theme = await page.locator("#dashboard").evaluate(element => {
     const style = getComputedStyle(element);
     return {
@@ -41,7 +41,7 @@ test("opens directly without cookies, keeps settings and streams without login",
   await page.goto("/");
   await expect(page.locator("#stream-health")).toHaveText("Dashboard connected");
   await expect(page.locator("#demand")).toHaveText("4");
-  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  await expect(page.locator("#thresholds tr")).toHaveCount(1);
   await expect(page.locator(".access-warning")).toContainText("anyone who can reach");
   await expect(page.getByLabel("Dashboard password")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);

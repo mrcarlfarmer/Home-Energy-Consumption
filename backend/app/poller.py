@@ -38,6 +38,7 @@ class Poller:
         self.task: asyncio.Task[None] | None = None
         self.inflight: asyncio.Task[None] | None = None
         self.recovery_due = False
+        self.ev_health: dict[str, Any] | None = None
 
     async def publish(self) -> None:
         async with self.publish_lock:
@@ -89,6 +90,7 @@ class Poller:
                 "data_version": data_version,
                 "reading": reading,
                 "health": dict(self.health),
+                "home_assistant": dict(self.ev_health) if self.ev_health is not None else None,
             }
         )
 

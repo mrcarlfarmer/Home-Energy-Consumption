@@ -19,6 +19,10 @@ class PublicConfig(BaseModel):
     updated_at_us: int
     thresholds_w: list[int]
     devices: list[Device]
+    home_assistant_url: str | None
+    home_assistant_entity: str | None
+    home_assistant_enabled: bool
+    has_home_assistant_token: bool
 
 
 class AuthState(BaseModel):
@@ -75,11 +79,30 @@ class LiveReading(BaseModel):
     quality: str
 
 
+class HomeAssistantHealth(BaseModel):
+    state: str
+    last_success_at: str | None
+    reported_at: str | None
+    power_w: float | None
+    error_code: str | None
+    next_attempt_at: str | None
+    recovery_cursor_at: str | None
+
+
+class HomeAssistantConnectivity(BaseModel):
+    power_w: float | None
+    reported_at: str
+    fresh: bool
+    history_available: bool
+    warnings: list[str]
+
+
 class Snapshot(BaseModel):
     device_id: str | None
     data_version: int
     reading: LiveReading | None
     health: Health
+    home_assistant: HomeAssistantHealth | None = None
 
 
 class Method(BaseModel):

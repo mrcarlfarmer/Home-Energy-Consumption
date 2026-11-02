@@ -47,6 +47,13 @@ async def test_login_config_redaction_csrf_and_bounds(tmp_path: Path) -> None:
         assert saved.status_code == 200, saved.text
         assert "private-key" not in saved.text
         assert saved.json()["has_api_key"]
+        assert saved.json()["thresholds_w"] == [6000]
+        summary = await client.get(
+            "/api/analytics/summary",
+            params={"from": "2026-01-01T00:00:00Z", "to": "2026-01-02T00:00:00Z"},
+        )
+        assert summary.status_code == 200
+        assert [row["threshold_w"] for row in summary.json()["thresholds"]] == [6000]
         assert (await client.post("/api/config", json=data)).status_code == 409
         client.headers["X-CSRF-Token"] = "wrong"
         assert (await client.post("/api/config", json={"expected_revision": 2})).status_code == 403

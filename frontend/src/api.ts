@@ -3,6 +3,8 @@ export interface Config {
   revision: number; account_number: string | null; active_device_id: string | null;
   has_api_key: boolean; polling_enabled: boolean; poll_interval_seconds: number;
   display_timezone: string; devices: Device[];
+  home_assistant_url: string | null; home_assistant_entity: string | null;
+  home_assistant_enabled: boolean; has_home_assistant_token: boolean;
 }
 export interface Snapshot {
   device_id: string | null; data_version: number;
@@ -20,6 +22,11 @@ export interface Snapshot {
     recovery_target_at: string | null; recovery_gap_count: number;
     recovery_error: string | null;
   };
+  home_assistant?: {
+    state: string; power_w: number | null; reported_at: string | null;
+    last_success_at: string | null; error_code: string | null;
+    next_attempt_at: string | null; recovery_cursor_at: string | null;
+  } | null;
 }
 export interface Metrics {
   coverage_pct: number; observed_seconds: number; requested_seconds: number;
@@ -33,6 +40,7 @@ export interface Summary extends Metrics {
   device_id: string;
   warnings: string[];
   from: string; to: string;
+  method: { power_basis: string };
   thresholds: {
     threshold_w: number; seconds_above: number; time_above_pct: number | null;
     energy_when_above_kwh: number | null; excess_energy_kwh: number | null;
@@ -42,6 +50,7 @@ export interface Summary extends Metrics {
 export interface History {
   interval_seconds: number;
   bucket_alignment: string; warnings: string[];
+  method: { power_basis: string };
   series: {
     bucket_start_epoch_s: number[]; bucket_end_epoch_s: number[];
     mean_import_w: (number | null)[]; sampled_peak_w: (number | null)[];
