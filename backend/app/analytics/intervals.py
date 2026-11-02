@@ -101,12 +101,27 @@ def integrate_without_ev(
             else:
                 result.samples += 1
                 result.record_peak(at, demand - ev.power_mw)
+    for a, b, adjusted in supported_segments(rows, start, end, intervals):
+        result.add_duration(adjusted, b - a)
+        result.record_peak(a, adjusted)
+    return result
+
+
+def supported_segments(
+    rows: list[tuple[int, int | None]],
+    start: int,
+    end: int,
+    intervals: list[EVInterval] | None = None,
+) -> Iterable[tuple[int, int, int]]:
     index = 0
     for (before, power_mw), (after, next_power) in zip(rows, rows[1:], strict=False):
         if power_mw is None or next_power is None or not 0 < after - before <= GAP_US:
             continue
         left, right = max(start, before), min(end, after)
         if left >= right:
+            continue
+        if intervals is None:
+            yield left, right, max(0, power_mw)
             continue
         while index < len(intervals) and intervals[index].end <= left:
             index += 1
@@ -115,8 +130,5 @@ def integrate_without_ev(
             ev = intervals[j]
             a, b = max(left, ev.start), min(right, ev.end)
             if a < b and ev.power_mw is not None:
-                adjusted = max(0, power_mw - ev.power_mw)
-                result.add_duration(adjusted, b - a)
-                result.record_peak(a, adjusted)
+                yield a, b, max(0, power_mw - ev.power_mw)
             j += 1
-    return result

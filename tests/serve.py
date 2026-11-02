@@ -2,13 +2,16 @@
 
 import argparse
 import asyncio
+import json
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
 import uvicorn
 from app.db.store import Store
 from app.home_assistant import HomeAssistant
+from app.kraken import Kraken
 from app.main import create_app
 from app.models import ConfigUpdate, EVInterval, Reading, iso, now_us, timestamp_us
 from app.settings import Settings
@@ -75,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-login", action="store_true")
     parser.add_argument("--with-ev", action="store_true")
+    parser.add_argument("--with-tariff", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="energy-browser-test-") as temporary:
         directory = Path(temporary)
@@ -100,6 +104,70 @@ if __name__ == "__main__":
             }
             return httpx.Response(200, json=row if "/states/" in request.url.path else [[row]])
 
+        def tariff_upstream(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "next": None,
+                        "results": [
+                            {
+                                "value_inc_vat": 30,
+                                "valid_from": "2020-01-01T00:00:00Z",
+                                "valid_to": None,
+                                "payment_method": None,
+                            }
+                        ],
+                    },
+                )
+            query = json.loads(request.content)["query"]
+            if "obtainKrakenToken" in query:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "obtainKrakenToken": {
+                                "token": "fixture-jwt",
+                                "payload": {"exp": time.time() + 3600},
+                            }
+                        }
+                    },
+                )
+            if "TariffAgreements" in query:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "account": {
+                                "electricityAgreements": [
+                                    {
+                                        "meterPoint": {
+                                            "id": "fixture-point",
+                                            "direction": "IMPORT",
+                                            "meters": [{"smartDevices": [{"deviceId": DEVICE}]}],
+                                            "agreements": [
+                                                {
+                                                    "validFrom": "2020-01-01T00:00:00Z",
+                                                    "validTo": None,
+                                                    "isRevoked": False,
+                                                    "tariff": {
+                                                        "productCode": "FIXTURE-26-01-01",
+                                                        "tariffCode": "E-1R-FIXTURE-26-01-01-A",
+                                                        "displayName": "Fixture Octopus tariff",
+                                                        "isExport": False,
+                                                    },
+                                                    "timeOfUseScheme": None,
+                                                }
+                                            ],
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                )
+            raise AssertionError("Unexpected fixture Octopus request")
+
         app = create_app(
             Settings(
                 database=database,
@@ -110,6 +178,9 @@ if __name__ == "__main__":
                 allowed_hosts=("127.0.0.1",),
                 allowed_origins=(f"http://127.0.0.1:{args.port}",),
             ),
+            client=Kraken(httpx.AsyncClient(transport=httpx.MockTransport(tariff_upstream)))
+            if args.with_tariff
+            else None,
             home_client=HomeAssistant(
                 httpx.AsyncClient(transport=httpx.MockTransport(home_upstream))
             ),

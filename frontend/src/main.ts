@@ -1,4 +1,4 @@
-import { api, ApiError, authenticationRequired, Config, Device, History, session, Snapshot, StorageStatus, Summary } from "./api";
+import { api, ApiError, authenticationRequired, Config, DailyPeaks, Device, History, RecoveryStatus, session, Snapshot, StorageStatus, Summary, TariffStatus } from "./api";
 import { DemandChart } from "./charts";
 import "./styles.css";
 
@@ -14,6 +14,24 @@ let lastRefresh = 0;
 let lastVersion = -1;
 let selectedMinutes = 1440;
 let generation = 0;
+let recoveryRange: { from: string; to: string; device_id: string } | undefined;
+let recoveryBusy = false;
+let recoveryPending = false;
+let viewRange = { from: new Date(), to: new Date() };
+let followLatest = true;
+let autoRefresh = true;
+let pendingAutomatic = false;
+let analysisDirty = false;
+
+function fillRecovery(): void {
+  element<HTMLButtonElement>("recover-history").disabled = recoveryBusy || !config.polling_enabled
+    || !recoveryRange || recoveryRange.device_id !== config.active_device_id;
+  text("recovery-help", !config.polling_enabled
+    ? "Enable meter polling to recover missing historical readings. This button never starts polling."
+    : !recoveryRange || recoveryRange.device_id !== config.active_device_id
+      ? "Select the active meter and a range within retained raw history (at most 31 days) to recover readings."
+      : "Retries missing Octopus readings in this range, excluding the newest three minutes. Live collection continues. Older data may be unavailable; missing Ohme history is not recovered here.");
+}
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -23,6 +41,35 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 function text(id: string, value: string): void { element(id).textContent = value; }
 function number(value: number | null, digits = 2): string {
   return value === null ? "Unavailable" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+function money(value: number | null): string {
+  return value === null ? "Unavailable" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(value);
+}
+function showTariff(status: TariffStatus): void {
+  text("tariff-status", [
+    status.tariff_name ? `${status.tariff_name} (${status.tariff_code})` : "No tariff pricing fetched.",
+    status.enabled ? "Cost estimates enabled." : "Cost estimates disabled.",
+    status.fetched_at ? `Fetched: ${new Date(status.fetched_at).toLocaleString()}.` : "",
+    status.schedule ?? "",
+    status.state === "refreshing" ? "Refreshing pricing..." : "",
+    status.error_code ? `Refresh error: ${status.error_code.replaceAll("_", " ")}. Previously fetched rates are retained.` : "",
+    ...status.warnings,
+  ].filter(Boolean).join(" "));
+  const body = element<HTMLTableSectionElement>("tariff-rates"); body.replaceChildren();
+  for (const rate of status.rates) {
+    const row = body.insertRow();
+    for (const value of [
+      rate.band.replace("ECO7_", "").toLowerCase(),
+      `${number(rate.pence_per_kwh, 5)} p/kWh`,
+      new Date(rate.from).toLocaleString(), new Date(rate.to).toLocaleString(),
+    ]) row.insertCell().textContent = value;
+  }
+}
+async function loadTariff(): Promise<void> {
+  try { showTariff(await api<TariffStatus>("/api/tariff")); }
+  catch (error) {
+    text("tariff-status", error instanceof Error ? error.message : "Tariff pricing could not be loaded.");
+  }
 }
 function duration(seconds: number): string {
   const total = Math.round(seconds * 100) / 100;
@@ -45,10 +92,12 @@ function showError(error: unknown): void {
 function clearMessage(): void { text("message", ""); }
 function cleanup(): void {
   generation++;
+  recoveryRange = undefined; recoveryBusy = false; recoveryPending = false;
   window.onhashchange = null;
   stream?.close(); stream = undefined;
   chart?.destroy(); chart = undefined;
   pending?.abort(); pending = undefined;
+  pendingAutomatic = false;
 }
 function renderLogin(message = ""): void {
   cleanup();
@@ -86,6 +135,7 @@ function fillPolling(): void {
   element<HTMLInputElement>("live-interval").value = String(config.poll_interval_seconds);
   element<HTMLInputElement>("enabled").checked = config.polling_enabled;
   element<HTMLInputElement>("interval").value = String(config.poll_interval_seconds);
+  fillRecovery();
 }
 async function savePolling(update: { polling_enabled?: boolean; poll_interval_seconds?: number }): Promise<void> {
   clearMessage();
@@ -118,11 +168,13 @@ function fillSettings(): void {
   element<HTMLInputElement>("ha-entity").value = config.home_assistant_entity ?? "";
   element<HTMLInputElement>("ha-token").value = "";
   element<HTMLInputElement>("ha-enabled").checked = config.home_assistant_enabled;
+  element<HTMLInputElement>("tariff-enabled").checked = config.tariff_pricing_enabled;
+  element<HTMLButtonElement>("tariff-fetch").disabled = !config.has_api_key || !config.account_number || !config.active_device_id;
   element<HTMLInputElement>("ha-clear-token").checked = false;
   text("ha-token-status", config.has_home_assistant_token ? "Token saved. Leave blank to keep it." : "No token saved.");
-  const evOption = element<HTMLSelectElement>("analysis-basis").options[1];
-  evOption.disabled = !config.home_assistant_url || !config.home_assistant_entity;
-  if (evOption.disabled) element<HTMLSelectElement>("analysis-basis").value = "grid";
+  const evToggle = element<HTMLInputElement>("analysis-basis");
+  evToggle.disabled = !config.home_assistant_url || !config.home_assistant_entity;
+  if (evToggle.disabled) evToggle.checked = false;
 }
 function draft(): Record<string, unknown> {
   const data: Record<string, unknown> = {
@@ -134,33 +186,60 @@ function draft(): Record<string, unknown> {
   return data;
 }
 function localDate(date: Date): string {
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
+}
+function setWindow(from: Date, to: Date): void {
+  viewRange = { from, to };
+  element<HTMLInputElement>("from").value = localDate(from);
+  element<HTMLInputElement>("to").value = localDate(to);
+  element<HTMLButtonElement>("next-window").disabled =
+    to.getTime() + (to.getTime() - from.getTime()) > Date.now();
+  text("window-mode", followLatest ? "Latest window" : "Fixed window");
 }
 function setRange(minutes: number): void {
   selectedMinutes = minutes;
+  followLatest = true;
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
     button.setAttribute("aria-pressed", String(Number(button.dataset.minutes) === minutes));
   }
   const end = new Date();
-  element<HTMLInputElement>("from").value = localDate(new Date(end.getTime() - minutes * 60000));
-  element<HTMLInputElement>("to").value = localDate(end);
+  setWindow(new Date(end.getTime() - minutes * 60000), end);
 }
-async function refresh(): Promise<void> {
-  for (const id of ["coverage", "energy", "peak", "above-6kw-time", "above-6kw-energy", "above-6kw-excess"]) text(id, "--");
-  element("thresholds").replaceChildren(); element("days").replaceChildren(); chart?.clear();
+function shiftWindow(direction: number): void {
+  const span = viewRange.to.getTime() - viewRange.from.getTime();
+  const to = new Date(viewRange.to.getTime() + direction * span);
+  const from = new Date(viewRange.from.getTime() + direction * span);
+  if (span <= 0 || from.getTime() < 0 || to.getTime() > Date.now()) return;
+  followLatest = false;
+  setWindow(from, to);
+  clearMessage(); void refresh();
+}
+function fillAutoRefresh(): void {
+  element<HTMLInputElement>("graph-auto-refresh").checked = autoRefresh;
+  text("graph-refresh-status", autoRefresh
+    ? "Graph auto-refresh is on. Window arrows keep historical dates fixed; presets return to the latest window."
+    : "Graph auto-refresh is off. Live readings and meter polling continue unchanged; use Refresh graph to update this view.");
+}
+async function refresh(automatic = false): Promise<void> {
+  if (automatic && pending) return;
+  analysisDirty = false;
+  recoveryRange = undefined; fillRecovery();
+  if (!automatic) {
+    for (const id of ["coverage", "energy", "peak", "above-6kw-time", "above-6kw-energy", "above-6kw-excess", "above-6kw-load-cost", "above-6kw-excess-cost"]) text(id, "--");
+    text("pricing-note", "");
+    element("thresholds").replaceChildren(); element("days").replaceChildren(); chart?.clear();
+  }
   const selected = element<HTMLSelectElement>("history-device").value;
   if (!selected) { text("analysis-status", "Configure a meter to begin collecting history."); return; }
   pending?.abort();
   const controller = new AbortController();
   pending = controller;
+  pendingAutomatic = automatic;
   const current = generation;
   try {
-    const end = selectedMinutes ? new Date() : new Date(element<HTMLInputElement>("to").value);
-    const start = selectedMinutes
-      ? new Date(end.getTime() - selectedMinutes * 60000)
-      : new Date(element<HTMLInputElement>("from").value);
+    const { from: start, to: end } = viewRange;
     const query = new URLSearchParams({ from: start.toISOString(), to: end.toISOString(), device_id: selected });
-    const excludeEV = element<HTMLSelectElement>("analysis-basis").value === "exclude-ev";
+    const excludeEV = element<HTMLInputElement>("analysis-basis").checked;
     if (excludeEV) query.set("exclude_ev", "true");
     text("energy-label", excludeEV ? "Estimated non-EV import" : "Estimated import");
     text("peak-label", excludeEV ? "Derived non-EV peak" : "Sampled peak");
@@ -171,14 +250,41 @@ async function refresh(): Promise<void> {
     text("days-label", excludeEV ? "Daily derived non-EV peaks" : "Daily sampled peaks");
     text("analysis-basis-note", excludeEV
       ? "EV power is subtracted before calculating these estimates. Missing Ohme data is unknown, not zero. Live demand remains whole-meter grid import. EV exclusion requires retained raw history."
-      : "Analytics include all grid import, including EV charging. Choose Excluding EV charging after configuring Home Assistant.");
+      : "Analytics include all grid import, including EV charging. Turn on Exclude EV charging after configuring Home Assistant.");
     text("analysis-status", "Calculating observed demand...");
     const storage = await api<StorageStatus>(`/api/storage?device_id=${encodeURIComponent(selected)}`, undefined, controller.signal);
     const archived = storage.retention && start.getTime() * 1000 < storage.retention.five_before_us;
     const timezone = archived ? storage.retention?.archive_timezone ?? config.display_timezone : config.display_timezone;
     const summary = await api<Summary>(`/api/analytics/summary?${query}&timezone=${encodeURIComponent(timezone)}`, undefined, controller.signal);
     const history = await api<History>(`/api/analytics/history?${query}&interval=auto&max_points=${archived ? 4000 : 1500}`, undefined, controller.signal);
+    let peaks: DailyPeaks | undefined;
+    let peakError = "";
+    try {
+      peaks = await api<DailyPeaks>(`/api/analytics/daily-peaks?${query}&timezone=${encodeURIComponent(timezone)}`, undefined, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted || error instanceof ApiError && error.status === 401) throw error;
+      peakError = error instanceof Error ? error.message : "Daily peaks could not be loaded.";
+    }
+    let rates: TariffStatus["rates"] = [];
+    let tariffNote = "";
+    try {
+      const tariff = await api<TariffStatus>(`/api/tariff?${query}`, undefined, controller.signal);
+      rates = tariff.rates;
+      tariffNote = rates.length
+        ? "Off-peak shading uses cached household night-rate intervals only; missing tariff periods are not inferred."
+        : "No cached household tariff intervals cover this meter/window. Fetch pricing in Settings to identify off-peak slots.";
+    } catch (error) {
+      if (controller.signal.aborted || error instanceof ApiError && error.status === 401) throw error;
+      tariffNote = `Off-peak indicators unavailable: ${error instanceof Error ? error.message : "Tariff request failed."}`;
+    }
     if (current !== generation || controller.signal.aborted) return;
+    if (start.getTime() >= Math.max(
+      Date.now() - Math.min(storage.policy.raw_days, 31) * 86400000 - 60000,
+      (storage.retention?.raw_before_us ?? 0) / 1000,
+    ) && start.getTime() < Date.now() - 180000) {
+      recoveryRange = { from: start.toISOString(), to: end.toISOString(), device_id: selected };
+    }
+    fillRecovery();
     const above6kw = summary.thresholds.find(value => value.threshold_w === 6000);
     if (!above6kw) throw new Error("Analysis is missing the 6 kW threshold.");
     text("coverage", `${number(summary.coverage_pct)}%`);
@@ -187,6 +293,15 @@ async function refresh(): Promise<void> {
     text("above-6kw-time", summary.observed_seconds > 0 ? duration(above6kw.seconds_above) : "Unavailable");
     text("above-6kw-energy", above6kw.energy_when_above_kwh === null ? "Unavailable" : `${number(above6kw.energy_when_above_kwh, 3)} kWh`);
     text("above-6kw-excess", above6kw.excess_energy_kwh === null ? "Unavailable" : `${number(above6kw.excess_energy_kwh, 3)} kWh`);
+    const loadCost = summary.pricing.enabled ? money(summary.pricing.energy_when_above_gbp) : "Pricing disabled";
+    const excessCost = summary.pricing.enabled ? money(summary.pricing.excess_energy_gbp) : "Pricing disabled";
+    text("above-6kw-load-cost", loadCost);
+    text("above-6kw-excess-cost", excessCost);
+    text("pricing-note", [
+      summary.pricing.warning,
+      summary.pricing.price_coverage_pct !== null ? `Applicable prices cover ${number(summary.pricing.price_coverage_pct)}% of observed time above 6 kW.` : "",
+      "Costs cover observed energy only, not missing telemetry. Exceeding 6 kW does not itself incur an extra Octopus charge.",
+    ].filter(Boolean).join(" "));
     text("analysis-status", `${number(summary.observed_seconds / 3600)} observed hours of ${number(summary.requested_seconds / 3600)}. Chart buckets: ${history.interval_seconds / 60} min. Calendar days: ${timezone}. Range: ${new Date(summary.from).toLocaleString()} - ${new Date(summary.to).toLocaleString()}. Retention: raw ${storage.policy.raw_days} days, five-minute ${storage.policy.five_minute_days} days, daily ${storage.policy.daily_days} days. ${[...new Set([...summary.warnings, ...history.warnings])].join(". ")}`);
     const thresholdBody = element<HTMLTableSectionElement>("thresholds");
     thresholdBody.replaceChildren();
@@ -194,22 +309,29 @@ async function refresh(): Promise<void> {
     for (const cell of [
       `${above6kw.threshold_w / 1000} kW`, `${number(above6kw.time_above_pct)}%`,
       `${number(above6kw.energy_when_above_kwh, 3)} kWh`, `${number(above6kw.excess_energy_kwh, 3)} kWh`,
+      loadCost, excessCost,
     ]) row.insertCell().textContent = cell;
     const days = element<HTMLTableSectionElement>("days"); days.replaceChildren();
-    for (const day of summary.daily_peaks) {
+    text("days-status", peaks
+      ? `Five calendar days ending at the viewed window, newest first. Calendar timezone: ${peaks.timezone}. The final day may be partial. ${peaks.warnings.join(". ")}`
+      : `Daily peaks unavailable: ${peakError}`);
+    for (const day of [...peaks?.daily_peaks ?? []].reverse()) {
       const row = days.insertRow();
       for (const value of [
         day.date, day.sampled_peak_w === null ? "Unavailable" : `${number(day.sampled_peak_w / 1000)} kW`,
         `${number(day.coverage_pct)}%`,
       ]) row.insertCell().textContent = value;
     }
-    chart?.update(history);
+    text("off-peak-status", tariffNote);
+    chart?.update(history, rates);
     lastRefresh = Date.now();
   } catch (error) {
     if (!controller.signal.aborted && current === generation) {
       text("analysis-status", "Analysis could not be loaded.");
       showError(error);
     }
+  } finally {
+    if (pending === controller) { pending = undefined; pendingAutomatic = false; }
   }
 }
 function connect(): void {
@@ -229,6 +351,16 @@ function connect(): void {
       const measured = snapshot.reading ? new Date(snapshot.reading.read_at).toLocaleString() : "No reading yet";
       text("read-at", `Last measurement: ${measured}`);
       const h = snapshot.health;
+      const recoveryFinished = recoveryPending && !h.recovery_pending && !h.recovery_error;
+      recoveryPending = h.recovery_pending;
+      if (h.recovery_error) text("recovery-status", `Recovery paused: ${h.recovery_error.replaceAll("_", " ")}. Correct settings or request another recovery pass.`);
+      else if (h.recovery_pending) text("recovery-status", [
+        "Active-meter recovery in progress.",
+        h.recovery_cursor_at ? `Checking from ${new Date(h.recovery_cursor_at).toLocaleString()}.` : "",
+        h.recovery_target_at ? `Target: ${new Date(h.recovery_target_at).toLocaleString()}.` : "",
+        "Live and historical requests alternate at the configured polling interval.",
+      ].filter(Boolean).join(" "));
+      else if (recoveryFinished) text("recovery-status", "Recovery pass finished. Any remaining gaps are still missing from the available readings; check Collection health for unavailable windows.");
       const ev = snapshot.home_assistant;
       text("home-assistant-health", ev
         ? [
@@ -259,14 +391,18 @@ function connect(): void {
         h.last_maintenance_at ? `Maintenance: ${new Date(h.last_maintenance_at).toLocaleString()}` : "",
       ].filter(Boolean).join(" | "));
       if (snapshot.device_id !== config.active_device_id) {
-        void api<Config>("/api/config").then(value => { config = value; fillSettings(); return refresh(); }).catch(showError);
+        void api<Config>("/api/config").then(value => {
+          config = value;
+          if (autoRefresh) { fillSettings(); return refresh(); }
+          text("graph-refresh-status", "The active meter changed. Graph remains paused; refresh to load the updated settings.");
+        }).catch(showError);
       }
-      if (snapshot.data_version !== lastVersion) {
-        lastVersion = snapshot.data_version;
-        if (Date.now() - lastRefresh > 60000 && !document.hidden) {
-          if (selectedMinutes) setRange(selectedMinutes);
-          void refresh();
-        }
+      const versionChanged = snapshot.data_version !== lastVersion;
+      lastVersion = snapshot.data_version;
+      analysisDirty ||= versionChanged || recoveryFinished;
+      if (autoRefresh && !pending && (recoveryFinished || (analysisDirty && Date.now() - lastRefresh > 60000)) && !document.hidden) {
+        if (followLatest && selectedMinutes) setRange(selectedMinutes);
+        void refresh(true);
       }
     } catch (error) { showError(error); }
   });
@@ -303,7 +439,7 @@ async function renderDashboard(): Promise<void> {
     <article><span class="channel">CH.03</span><p id="peak-label">Sampled peak</p><strong id="peak">--</strong><small id="peak-hint">Highest observed reading</small></article>
     <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small id="coverage-hint">Within the selected window</small></article>
     <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
-    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article></section>
+    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Cost while above: <span id="above-6kw-load-cost">--</span><br>Cost of excess: <span id="above-6kw-excess-cost">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article></section>
     <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <p id="home-assistant-health">Ohme via Home Assistant: disabled</p>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
@@ -312,25 +448,45 @@ async function renderDashboard(): Promise<void> {
     <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
     <p id="polling-help" class="note"></p></form></section>
     <section id="history"><div class="section-heading"><div><p class="eyebrow">OBSERVED DEMAND</p><h2>Demand, in detail</h2></div><select id="history-device" aria-label="Historical meter"></select></div>
-    <label>Analysis basis<select id="analysis-basis"><option value="grid">Whole-meter grid import</option><option value="exclude-ev">Excluding EV charging</option></select></label>
+    <div class="graph-controls">
+    <label class="check switch"><input id="analysis-basis" type="checkbox" role="switch" aria-describedby="analysis-basis-note">Exclude EV charging</label>
+    <label class="check switch"><input id="graph-auto-refresh" type="checkbox" role="switch" aria-describedby="graph-refresh-status">Auto-refresh graph</label>
+    <button id="refresh-graph" class="secondary" type="button">Refresh graph</button></div>
     <p id="analysis-basis-note" class="note"></p>
-    <div class="presets"><button data-minutes="5">5 min</button><button data-minutes="15">15 min</button><button data-minutes="30">30 min</button><button data-minutes="60">1 hour</button><button data-minutes="1440">24 hours</button><button data-minutes="10080">7 days</button><button data-minutes="43200">30 days</button></div>
-    <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" required></label>
-    <label>To (browser local time)<input id="to" type="datetime-local" required></label><button>Apply custom range</button></form>
+    <p id="graph-refresh-status" class="note" role="status"></p>
+    <div class="presets"><button data-minutes="5">5 min</button><button data-minutes="15">15 min</button><button data-minutes="30">30 min</button><button data-minutes="60">1 hour</button><button data-minutes="720">12 hours</button><button data-minutes="1440">24 hours</button><button data-minutes="10080">7 days</button><button data-minutes="43200">30 days</button></div>
+    <div class="window-navigation" role="group" aria-label="Time window navigation">
+    <button id="previous-window" class="secondary" type="button" aria-label="Previous time window">&lt;</button>
+    <span id="window-mode" class="note"></span>
+    <button id="next-window" class="secondary" type="button" aria-label="Next time window">&gt;</button></div>
+    <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" step="1" required></label>
+    <label>To (browser local time)<input id="to" type="datetime-local" step="1" required></label><button>Apply custom range</button></form>
     <p id="analysis-status" role="status"></p>
+    <button id="recover-history" class="secondary" type="button" disabled>Recover missing readings</button>
+    <p id="recovery-help" class="note"></p>
+    <p id="recovery-status" role="status"></p>
     <div id="chart" aria-label="Demand history chart"></div>
-    <p class="note">Gaps are unknown, not zero. Incomplete bucket means and incomplete 15-minute windows are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
+    <div class="chart-indicators" aria-label="Visible chart indicators"><span id="off-peak-key" class="off-peak-key" hidden>Household off-peak slot</span><span id="threshold-key" class="threshold-key" hidden>6 kW threshold</span></div>
+    <p id="off-peak-status" class="note"></p>
+    <p class="note">Gaps are unknown, not zero. Incomplete bucket means are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
     </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
-    <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th></tr></thead><tbody id="thresholds"></tbody></table></div>
+    <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th><th scope="col">Estimated cost while above</th><th scope="col">Estimated excess cost</th></tr></thead><tbody id="thresholds"></tbody></table></div>
+    <p id="pricing-note" class="note"></p>
     <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 6 kW comparison is not a G98/G99 compliance assessment.</p>
-    <details><summary id="days-label">Daily sampled peaks</summary><div class="table-scroll"><table><thead><tr><th>Local date</th><th>Peak demand</th><th>Coverage</th></tr></thead><tbody id="days"></tbody></table></div></details></section>
+    <div id="daily-peaks" aria-labelledby="days-label"><h3 id="days-label">Daily sampled peaks</h3><p id="days-status" class="note"></p><div class="table-scroll"><table><thead><tr><th scope="col">Local date</th><th scope="col">Peak demand</th><th scope="col">Coverage</th></tr></thead><tbody id="days"></tbody></table></div></div></section>
     </main><main id="settings-page" hidden><section id="settings-section"><div class="page-heading"><div><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h1>Settings</h1></div></div><form id="settings"><div class="settings-grid">
     <label>Octopus account number<input id="account" autocomplete="off" maxlength="64" placeholder="A-..."></label>
     <label>Electricity meter<select id="device"></select><small>Test account connectivity to discover meters.</small></label>
     <label>Replace Octopus API key<input id="key" type="password" autocomplete="new-password" maxlength="512"><small id="key-status"></small></label>
     <label>Polling interval (seconds)<input id="interval" type="number" min="30" max="3600" required></label>
     <label>Display / calendar timezone<input id="timezone" required></label>
-    <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling first)</label></div></div>
+    <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling and tariff pricing first)</label></div></div>
+    <h2 class="settings-subheading">Tariff pricing</h2>
+    <label class="check"><input id="tariff-enabled" type="checkbox">Estimate costs using Octopus tariff pricing</label>
+    <p class="note">Save your Octopus account and meter first, then fetch their household import rates. Enable and save to refresh prices automatically every six hours, independently of meter polling. Prices include VAT; standing charges and EV-specific smart-charging adjustments are excluded. Both the whole load while above 6 kW and only the excess energy are priced at their applicable time-based rates.</p>
+    <button id="tariff-fetch" class="secondary" type="button">Fetch Octopus pricing</button>
+    <p id="tariff-status" role="status">Loading tariff pricing...</p>
+    <div class="table-scroll"><table><caption>Household rates covering the next 24 hours (browser local times)</caption><thead><tr><th scope="col">Band</th><th scope="col">Unit rate including VAT</th><th scope="col">From</th><th scope="col">To</th></tr></thead><tbody id="tariff-rates"></tbody></table></div>
     <h2 class="settings-subheading">Ohme via Home Assistant</h2><div class="settings-grid">
     <label><span id="ha-url-label">Home Assistant URL</span><input id="ha-url" aria-labelledby="ha-url-label" aria-describedby="ha-url-help" type="url" maxlength="512" placeholder="http://homeassistant.local:8123"><small id="ha-url-help">Use an address reachable from this app's container. HTTPS is recommended; HTTP sends the token unencrypted. Redirects are not followed.</small></label>
     <label><span id="ha-entity-label">Ohme power entity</span><input id="ha-entity" aria-labelledby="ha-entity-label" aria-describedby="ha-entity-help" maxlength="255" placeholder="sensor.ohme_home_pro_power"><small id="ha-entity-help">Power sensor in W or kW, recorded in Home Assistant history.</small></label>
@@ -339,16 +495,21 @@ async function renderDashboard(): Promise<void> {
     <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
     </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
-  fillSettings(); setRange(1440);
+  fillSettings(); setRange(1440); fillAutoRefresh();
+  void loadTariff();
   window.onhashchange = route; route();
-  chart = new DemandChart(element("chart"));
+  chart = new DemandChart(element("chart"), visible => {
+    element("off-peak-key").hidden = !visible.offPeak;
+    element("threshold-key").hidden = !visible.threshold;
+  });
   if (authenticationRequired) {
     element("logout").onclick = async () => {
       try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
     };
   }
   element<HTMLFormElement>("range").onsubmit = event => {
-    event.preventDefault(); selectedMinutes = 0;
+    event.preventDefault(); selectedMinutes = 0; followLatest = false;
+    setWindow(new Date(element<HTMLInputElement>("from").value), new Date(element<HTMLInputElement>("to").value));
     for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) button.setAttribute("aria-pressed", "false");
     clearMessage(); void refresh();
   };
@@ -357,6 +518,41 @@ async function renderDashboard(): Promise<void> {
   }
   element("history-device").onchange = () => { clearMessage(); void refresh(); };
   element("analysis-basis").onchange = () => { clearMessage(); void refresh(); };
+  element("previous-window").onclick = () => shiftWindow(-1);
+  element("next-window").onclick = () => shiftWindow(1);
+  element("refresh-graph").onclick = () => {
+    if (followLatest && selectedMinutes) setRange(selectedMinutes);
+    clearMessage(); void refresh();
+  };
+  element<HTMLInputElement>("graph-auto-refresh").onchange = () => {
+    autoRefresh = element<HTMLInputElement>("graph-auto-refresh").checked;
+    if (!autoRefresh && pendingAutomatic) pending?.abort();
+    fillAutoRefresh();
+    if (autoRefresh) {
+      if (followLatest && selectedMinutes) setRange(selectedMinutes);
+      clearMessage(); void refresh();
+    }
+  };
+  element<HTMLButtonElement>("recover-history").onclick = async () => {
+    if (!recoveryRange) return;
+    const current = generation;
+    recoveryBusy = true; fillRecovery(); clearMessage();
+    text("recovery-status", "Requesting historical recovery for the selected range...");
+    try {
+      const queued = await api<RecoveryStatus>("/api/recovery", {
+        ...recoveryRange, expected_revision: config.revision,
+      });
+      if (current !== generation) return;
+      text("recovery-status", `Recovery queued: ${new Date(queued.from).toLocaleString()} to ${new Date(queued.to).toLocaleString()}. Existing pending work is retained; missing readings will be retried in fifteen-minute chunks.`);
+    } catch (error) {
+      if (current === generation) {
+        text("recovery-status", error instanceof Error ? error.message : "Historical recovery could not be requested.");
+        showError(error);
+      }
+    } finally {
+      if (current === generation) { recoveryBusy = false; fillRecovery(); }
+    }
+  };
   element<HTMLButtonElement>("toggle-polling").onclick = () => {
     void savePolling({ polling_enabled: !config.polling_enabled });
   };
@@ -373,6 +569,7 @@ async function renderDashboard(): Promise<void> {
       home_assistant_url: element<HTMLInputElement>("ha-url").value.trim() || null,
       home_assistant_entity: element<HTMLInputElement>("ha-entity").value.trim() || null,
       home_assistant_enabled: element<HTMLInputElement>("ha-enabled").checked,
+      tariff_pricing_enabled: element<HTMLInputElement>("tariff-enabled").checked,
     };
     if (element<HTMLInputElement>("clear-key").checked) data.api_key = null;
     const homeToken = element<HTMLInputElement>("ha-token").value;
@@ -381,8 +578,20 @@ async function renderDashboard(): Promise<void> {
     try {
       config = await api<Config>("/api/config", data);
       fillSettings(); text("test-result", "Settings saved.");
+      await loadTariff();
       await refresh();
     } catch (error) { showError(error); }
+  };
+  element<HTMLButtonElement>("tariff-fetch").onclick = async () => {
+    const button = element<HTMLButtonElement>("tariff-fetch"); button.disabled = true;
+    clearMessage(); text("tariff-status", "Fetching pricing for the saved Octopus account and meter...");
+    try {
+      showTariff(await api<TariffStatus>("/api/tariff/refresh", { expected_revision: config.revision }));
+      await refresh();
+    } catch (error) {
+      showError(error);
+      text("tariff-status", error instanceof Error ? error.message : "Tariff pricing refresh failed.");
+    } finally { button.disabled = false; }
   };
   element<HTMLButtonElement>("ha-test").onclick = async () => {
     const button = element<HTMLButtonElement>("ha-test"); button.disabled = true;

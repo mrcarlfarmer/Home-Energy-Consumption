@@ -1,3 +1,4 @@
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -103,6 +104,7 @@ class ConfigUpdate(BaseModel):
     home_assistant_token: SecretStr | None = None
     home_assistant_entity: str | None = Field(default=None, max_length=255)
     home_assistant_enabled: bool | None = None
+    tariff_pricing_enabled: bool | None = None
 
     @field_validator("home_assistant_url")
     @classmethod
@@ -208,11 +210,37 @@ class HomeAssistantTest(BaseModel):
         return ConfigUpdate.home_entity(value)
 
 
+class TariffRefresh(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
+class RecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    device_id: str = Field(min_length=1, max_length=64)
+    from_: str = Field(alias="from", max_length=64)
+    to: str = Field(max_length=64)
+
+
 @dataclass(frozen=True)
 class EVInterval:
     start: int
     end: int
     power_mw: int | None
+
+
+@dataclass(frozen=True)
+class TariffRate:
+    start: int
+    end: int
+    pence_per_kwh: Decimal
+    tariff_code: str
+    band: str
+
+
+def tariff_source(account: str, device: str) -> str:
+    return hashlib.sha256(f"{account}\0{device}".encode()).hexdigest()
 
 
 class Login(BaseModel):

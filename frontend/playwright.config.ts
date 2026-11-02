@@ -24,5 +24,10 @@ export default defineConfig({
     url: "http://127.0.0.1:8767/healthz",
     timeout: 30000,
     reuseExistingServer: false,
+  }, {
+    command: `${python} "${resolve("..", "tests", "serve.py")}" --no-login --with-ev --with-tariff --port 8769`,
+    url: "http://127.0.0.1:8769/healthz",
+    timeout: 30000,
+    reuseExistingServer: false,
   }],
 });

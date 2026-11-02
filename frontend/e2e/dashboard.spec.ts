@@ -180,7 +180,7 @@ test("short chart presets request exact windows ending now", async ({ page }) =>
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
-  for (const [label, minutes] of [["1 hour", 60], ["30 min", 30], ["15 min", 15], ["5 min", 5]] as const) {
+  for (const [label, minutes] of [["12 hours", 720], ["1 hour", 60], ["30 min", 30], ["15 min", 15], ["5 min", 5]] as const) {
     const response = page.waitForResponse(value => {
       const url = new URL(value.url());
       if (url.pathname !== "/api/analytics/history") return false;

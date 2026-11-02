@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from datetime import time as day_time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -24,8 +25,10 @@ from app.models import (
     ConfigUpdate,
     EVInterval,
     Reading,
+    TariffRate,
     iso,
     now_us,
+    tariff_source,
     timestamp_us,
 )
 from app.storage import DAY_US, StoragePolicy, StoragePressure
@@ -97,6 +100,8 @@ class Store:
                         "003_retention.sql",
                         "004_home_assistant.sql",
                         "005_six_kw_threshold.sql",
+                        "006_tariff_pricing.sql",
+                        "007_requested_recovery.sql",
                     )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
@@ -154,6 +159,7 @@ class Store:
             result.pop("singleton")
             result["polling_enabled"] = bool(result["polling_enabled"])
             result["home_assistant_enabled"] = bool(result["home_assistant_enabled"])
+            result["tariff_pricing_enabled"] = bool(result["tariff_pricing_enabled"])
             result["thresholds_w"] = list(THRESHOLDS)
             async with conn.execute(
                 "SELECT device_id,label FROM devices ORDER BY created_at_us"
@@ -164,6 +170,7 @@ class Store:
     async def save_config(self, update: ConfigUpdate) -> None:
         async with self.write() as conn:
             config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+            previous_identity = (config["account_number"], config["active_device_id"])
             if config["revision"] != update.expected_revision:
                 raise Conflict("Settings changed; reload before saving")
             for field in update.model_fields_set - {"expected_revision"}:
@@ -178,6 +185,7 @@ class Store:
                         "poll_interval_seconds",
                         "display_timezone",
                         "home_assistant_enabled",
+                        "tariff_pricing_enabled",
                     }:
                         raise ValueError(f"{field} cannot be null")
                     config[field] = value
@@ -197,6 +205,10 @@ class Store:
                 raise ValueError(
                     "Home Assistant URL, token, power entity and meter are required to enable EV collection"
                 )
+            if config["tariff_pricing_enabled"] and not all(
+                config[x] for x in ("octopus_api_key", "account_number", "active_device_id")
+            ):
+                raise ValueError("An API key, account and meter are required for tariff pricing")
             if config["active_device_id"]:
                 if not config["account_number"]:
                     raise ValueError("An account is required for the selected device")
@@ -214,7 +226,7 @@ class Store:
                 "UPDATE app_config SET revision=revision+1,account_number=?,active_device_id=?,"
                 "octopus_api_key=?,polling_enabled=?,poll_interval_seconds=?,display_timezone=?,"
                 "home_assistant_url=?,home_assistant_token=?,home_assistant_entity=?,home_assistant_enabled=?,"
-                "updated_at_us=? WHERE singleton=1",
+                "tariff_pricing_enabled=?,updated_at_us=? WHERE singleton=1",
                 tuple(
                     config[x]
                     for x in (
@@ -228,9 +240,78 @@ class Store:
                         "home_assistant_token",
                         "home_assistant_entity",
                         "home_assistant_enabled",
+                        "tariff_pricing_enabled",
                     )
                 )
                 + (now_us(),),
+            )
+            if previous_identity != (config["account_number"], config["active_device_id"]):
+                await conn.execute("DELETE FROM tariff_cache")
+
+    async def tariff_snapshot(
+        self, conn: aiosqlite.Connection, config: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        source = tariff_source(config["account_number"] or "", config["active_device_id"] or "")
+        async with conn.execute("SELECT * FROM tariff_cache WHERE source=?", (source,)) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row is not None else None
+
+    async def tariff_rows(
+        self, conn: aiosqlite.Connection, source: str, start: int, end: int
+    ) -> list[TariffRate]:
+        async with conn.execute(
+            "SELECT * FROM tariff_rates WHERE source=? AND start_us<? AND end_us>? ORDER BY start_us",
+            (source, end, start),
+        ) as cur:
+            return [
+                TariffRate(
+                    row["start_us"],
+                    row["end_us"],
+                    Decimal(row["pence_per_kwh"]),
+                    row["tariff_code"],
+                    row["band"],
+                )
+                for row in await cur.fetchall()
+            ]
+
+    async def save_tariff_rates(
+        self,
+        config: dict[str, Any],
+        start: int,
+        end: int,
+        rates: list[TariffRate],
+        details: dict[str, Any],
+    ) -> None:
+        source = tariff_source(config["account_number"], config["active_device_id"])
+        async with self.write() as conn:
+            current = await one(conn, "SELECT revision FROM app_config WHERE singleton=1")
+            if current["revision"] != config["revision"]:
+                raise Conflict("Settings changed while fetching pricing; retry with saved settings")
+            await conn.execute("DELETE FROM tariff_cache")
+            await conn.execute(
+                "INSERT INTO tariff_cache VALUES(?,?,?,?,?,?)",
+                (
+                    source,
+                    config["active_device_id"],
+                    now_us(),
+                    start,
+                    end,
+                    json.dumps(details),
+                ),
+            )
+            await conn.executemany(
+                "INSERT INTO tariff_rates VALUES(?,?,?,?,?,?)",
+                [
+                    (
+                        source,
+                        row.start,
+                        row.end,
+                        str(row.pence_per_kwh),
+                        row.tariff_code,
+                        row.band,
+                    )
+                    for row in rates
+                ],
             )
 
     async def password_hash(self) -> str | None:
@@ -369,6 +450,9 @@ class Store:
             if old and old["status"] == "pending":
                 cursor = int(old["cursor_us"])
                 target = int(old["target_us"])
+                if old["requested"]:
+                    retained = await self.retention(conn, device)
+                    horizon = max(at - self.policy.raw_days * DAY_US, retained["raw_before_us"])
             elif latest is None:
                 cursor = int(old["cursor_us"]) if old else horizon
             elif latest < target:
@@ -387,6 +471,51 @@ class Store:
                 "target_us=excluded.target_us,status='pending'",
                 (device, cursor, target),
             )
+
+    async def request_recovery(
+        self, device: str, start: int, end: int, revision: int
+    ) -> dict[str, Any]:
+        at = now_us()
+        async with self.write() as conn:
+            config = await one(conn, "SELECT * FROM app_config WHERE singleton=1")
+            if config["revision"] != revision:
+                raise Conflict("Settings changed; reload before requesting recovery")
+            if not config["polling_enabled"]:
+                raise ValueError("Enable meter polling before requesting historical recovery")
+            if device != config["active_device_id"]:
+                raise ValueError("Recovery is only available for the configured active meter")
+            retained = await self.retention(conn, device)
+            earliest = max(at - min(self.policy.raw_days, 31) * DAY_US, retained["raw_before_us"])
+            if start < earliest - 60_000_000:
+                raise ValueError(
+                    "Select a recovery range within retained raw history (at most 31 days)"
+                )
+            start = max(start, earliest)
+            end = min(end, at - 180_000_000)
+            if not 0 <= start < end:
+                raise ValueError("Select a historical range ending at least three minutes ago")
+            async with conn.execute(
+                "SELECT * FROM recovery_state WHERE device_id=?", (device,)
+            ) as cur:
+                previous = await cur.fetchone()
+            if previous and previous["status"] in ("pending", "paused"):
+                start = min(
+                    start,
+                    max(
+                        int(previous["cursor_us"]),
+                        retained["raw_before_us"],
+                        at - self.policy.raw_days * DAY_US,
+                    ),
+                )
+                end = max(end, int(previous["target_us"]))
+            await conn.execute(
+                "INSERT INTO recovery_state(device_id,cursor_us,target_us,status,requested) "
+                "VALUES(?,?,?,'pending',1) ON CONFLICT(device_id) DO UPDATE SET "
+                "cursor_us=excluded.cursor_us,target_us=excluded.target_us,status='pending',"
+                "requested=1,error_code=NULL",
+                (device, start, end),
+            )
+        return {"device_id": device, "from": iso(start), "to": iso(end), "state": "pending"}
 
     async def recovery(self, device: str) -> dict[str, Any] | None:
         async with (
@@ -427,6 +556,32 @@ class Store:
                 or config["active_device_id"] != device
             ):
                 return
+            async with conn.execute(
+                "SELECT cursor_us FROM recovery_state WHERE device_id=?", (device,)
+            ) as cur:
+                current = await cur.fetchone()
+            if current is None or current["cursor_us"] != start:
+                return
+            async with conn.execute(
+                "SELECT * FROM recovery_gaps WHERE device_id=? AND start_us<? AND end_us>?",
+                (device, end, start),
+            ) as cur:
+                previous_gaps = await cur.fetchall()
+            await conn.execute(
+                "DELETE FROM recovery_gaps WHERE device_id=? AND start_us<? AND end_us>?",
+                (device, end, start),
+            )
+            for gap in previous_gaps:
+                if gap["start_us"] < start:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO recovery_gaps VALUES(?,?,?,?)",
+                        (device, gap["start_us"], start, gap["reason"]),
+                    )
+                if gap["end_us"] > end:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO recovery_gaps VALUES(?,?,?,?)",
+                        (device, end, gap["end_us"], gap["reason"]),
+                    )
             if reason:
                 await conn.execute(
                     "INSERT OR REPLACE INTO recovery_gaps VALUES(?,?,?,?)",
@@ -435,9 +590,10 @@ class Store:
             await conn.execute(
                 "UPDATE recovery_state SET cursor_us=?,status=CASE WHEN ?>=target_us "
                 "THEN 'complete' ELSE 'pending' END,last_attempt_us=?,"
+                "requested=CASE WHEN ?>=target_us THEN 0 ELSE requested END,"
                 "unavailable_before_us=CASE WHEN ?='range_too_old' THEN ? ELSE unavailable_before_us END "
                 "WHERE device_id=? AND cursor_us=?",
-                (end, end, now_us(), reason, end, device, start),
+                (end, end, now_us(), end, reason, end, device, start),
             )
 
     async def recovery_health(self, device: str | None) -> dict[str, Any]:

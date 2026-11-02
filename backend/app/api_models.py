@@ -23,6 +23,7 @@ class PublicConfig(BaseModel):
     home_assistant_entity: str | None
     home_assistant_enabled: bool
     has_home_assistant_token: bool
+    tariff_pricing_enabled: bool
 
 
 class AuthState(BaseModel):
@@ -141,6 +142,41 @@ class Threshold(BaseModel):
     excess_energy_kwh: float | None
 
 
+class PricingEstimate(BaseModel):
+    enabled: bool
+    available: bool
+    energy_when_above_gbp: float | None
+    excess_energy_gbp: float | None
+    price_coverage_pct: float | None
+    priced_seconds_above: float
+    fetched_at: str | None
+    warning: str
+
+
+class TariffPrice(TimeRange):
+    pence_per_kwh: float
+    band: str
+
+
+class TariffStatus(BaseModel):
+    enabled: bool
+    state: str
+    error_code: str | None
+    fetched_at: str | None
+    from_: str | None = Field(alias="from")
+    to: str | None
+    tariff_name: str | None
+    tariff_code: str | None
+    schedule: str | None
+    rates: list[TariffPrice]
+    warnings: list[str]
+
+
+class RecoveryStatus(TimeRange):
+    device_id: str
+    state: Literal["pending"]
+
+
 class Summary(Metrics, TimeRange):
     device_id: str
     data_version: int
@@ -148,6 +184,14 @@ class Summary(Metrics, TimeRange):
     thresholds: list[Threshold]
     daily_peaks: list[DailyMetrics]
     method: Method
+    warnings: list[str]
+    pricing: PricingEstimate
+
+
+class DailyPeaks(TimeRange):
+    device_id: str
+    timezone: str
+    daily_peaks: list[DailyMetrics]
     warnings: list[str]
 
 

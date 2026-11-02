@@ -11,7 +11,8 @@
   --line: #34314c;
   --chart-mean: #a6dfe7;
   --chart-peak: #bbabff;
-  --chart-rolling: #9eaccd;
+  --chart-off-peak: #6ccfb522;
+  --chart-threshold: #f2cba9;
   color: var(--ink);
   background: var(--bg);
 }
@@ -92,6 +93,26 @@ section { margin-bottom: 22px; padding: 24px; border: 1px solid var(--line); bor
 .settings-subheading { margin-top: 30px; padding-top: 24px; border-top: 1px solid var(--line); }
 .check { flex-direction: row; align-items: center; margin: 12px 0; }
 .check input { width: auto; }
+.graph-controls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; }
+.graph-controls .check { margin: 0; }
+.switch input {
+  appearance: none; flex: 0 0 34px; width: 34px; height: 20px; padding: 2px;
+  border: 1px solid var(--muted); border-radius: 12px; background: var(--bg); cursor: pointer;
+}
+.switch input::before {
+  content: ""; display: block; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--muted); transition: transform .12s;
+}
+.switch input:checked { background: var(--accent); border-color: var(--accent); }
+.switch input:checked::before { transform: translateX(14px); background: var(--bg); }
+.switch input:disabled { opacity: .5; cursor: not-allowed; }
+.window-navigation { display: flex; align-items: center; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.chart-indicators { display: flex; flex-wrap: wrap; gap: 16px; font-size: .7rem; color: var(--muted); margin: 12px 0; }
+.chart-indicators [hidden] { display: none; }
+.off-peak-key::before { content: ""; display: inline-block; width: 18px; height: 12px; background: var(--chart-off-peak); border: 1px solid #6ccfb5; margin-right: 6px; }
+.threshold-key { color: var(--chart-threshold); }
+.threshold-key::before { content: ""; display: inline-block; width: 18px; border-top: 1px dashed var(--chart-threshold); margin: 0 6px 3px 0; }
+#daily-peaks { margin-top: 26px; }
 #message:empty { margin: 0; }
 #message:not(:empty), .transport-warning, .access-warning { padding: 14px; background: #2f2536; color: #f2cba9; border: 1px solid #6b4e66; border-radius: 2px; font-size: .7rem; }
 .healthy { color: #a6dfe7; }

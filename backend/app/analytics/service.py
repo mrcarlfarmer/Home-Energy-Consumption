@@ -7,7 +7,8 @@ from zoneinfo import ZoneInfo
 
 import aiosqlite
 
-from app.analytics.intervals import Metrics, integrate, integrate_without_ev
+from app.analytics.intervals import Metrics, integrate, integrate_without_ev, supported_segments
+from app.analytics.pricing import PricedThreshold
 from app.db.store import Store, one
 from app.home_assistant import ev_source
 from app.models import (
@@ -20,6 +21,7 @@ from app.models import (
     timestamp_us,
 )
 from app.storage import DAY_US
+from app.tariffs import PRICING_WARNING
 
 INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "6h": 21600, "1d": 86400}
 METHOD = {
@@ -138,7 +140,14 @@ class Analytics:
         return start, end, state, warnings
 
     async def ev_selection(
-        self, conn: aiosqlite.Connection, device: str, start: int, end: int, exclude_ev: bool
+        self,
+        conn: aiosqlite.Connection,
+        device: str,
+        start: int,
+        end: int,
+        exclude_ev: bool,
+        *,
+        allow_expired: bool = False,
     ) -> str | None:
         if not exclude_ev:
             return None
@@ -150,7 +159,9 @@ class Analytics:
                 "Configure Home Assistant for the selected meter to exclude EV charging"
             )
         retained = await self.store.retention(conn, device)
-        if start < retained["raw_before_us"] or end - start > self.store.policy.raw_days * DAY_US:
+        if not allow_expired and (
+            start < retained["raw_before_us"] or end - start > self.store.policy.raw_days * DAY_US
+        ):
             raise ValueError(
                 "EV exclusion requires retained raw readings; select a range within raw retention"
             )
@@ -281,6 +292,7 @@ class Analytics:
                     }
                 )
                 left, date = right, date + timedelta(days=1)
+            pricing = await self.price_threshold(conn, device, start, end, total, budget, source)
         thresholds = [
             {
                 "threshold_w": threshold,
@@ -302,11 +314,155 @@ class Analytics:
             **describe(total, end - start),
             "thresholds": thresholds,
             "daily_peaks": days,
+            "pricing": pricing,
             "method": EV_METHOD if source is not None else METHOD,
             "warnings": warnings
             + (EV_WARNINGS if source is not None else [])
             + (["Incomplete telemetry coverage"] if total.observed_us < end - start else []),
         }
+
+    async def daily_peaks(
+        self, end: int, timezone: str, selected: str | None = None, exclude_ev: bool = False
+    ) -> dict[str, Any]:
+        if end <= 0:
+            raise ValueError("Select an end time after 1970")
+        zone = ZoneInfo(timezone)
+        date = datetime.fromisoformat(iso(end - 1)).astimezone(zone).date() - timedelta(days=4)
+        start = max(0, timestamp_us(datetime.combine(date, time(), zone).isoformat()))
+        days: list[dict[str, Any]] = []
+        budget = [120]
+        async with self.store.read() as conn:
+            device, _ = await self.device(conn, selected)
+            source = await self.ev_selection(
+                conn, device, start, end, exclude_ev, allow_expired=True
+            )
+            if source is None:
+                start, end, retained, warnings = await self.retained_range(
+                    conn, device, start, end, timezone
+                )
+            else:
+                retained = await self.store.retention(conn, device)
+                warnings = list(EV_WARNINGS)
+                if start < retained["raw_before_us"]:
+                    warnings.append("Expired EV history is unavailable, not zero")
+            left = start
+            date = datetime.fromisoformat(iso(start)).astimezone(zone).date()
+            while left < end:
+                right = min(
+                    end,
+                    timestamp_us(
+                        datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
+                    ),
+                )
+                if source is not None:
+                    supported_start = max(left, int(retained["raw_before_us"]))
+                    m = (
+                        await self.aggregate(conn, device, supported_start, right, budget, source)
+                        if supported_start < right
+                        else Metrics()
+                    )
+                else:
+                    m = await self.aggregate(conn, device, left, right, budget)
+                days.append(
+                    {
+                        "date": date.isoformat(),
+                        "from": iso(left),
+                        "to": iso(right),
+                        **describe(m, right - left),
+                    }
+                )
+                left, date = right, date + timedelta(days=1)
+        return {
+            "device_id": device,
+            "from": iso(start),
+            "to": iso(end),
+            "timezone": timezone,
+            "daily_peaks": days,
+            "warnings": warnings,
+        }
+
+    async def price_threshold(
+        self,
+        conn: aiosqlite.Connection,
+        device: str,
+        start: int,
+        end: int,
+        total: Metrics,
+        budget: list[int],
+        source: str | None,
+    ) -> dict[str, Any]:
+        config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+        result: dict[str, Any] = {
+            "enabled": bool(config["tariff_pricing_enabled"]),
+            "available": False,
+            "energy_when_above_gbp": None,
+            "excess_energy_gbp": None,
+            "price_coverage_pct": None,
+            "priced_seconds_above": 0,
+            "fetched_at": None,
+            "warning": "Enable tariff pricing in Settings to estimate costs",
+        }
+        if not result["enabled"]:
+            return result
+        result["warning"] = PRICING_WARNING
+        if device != config["active_device_id"]:
+            result["warning"] = "Tariff pricing is only available for the configured active meter"
+            return result
+        snapshot = await self.store.tariff_snapshot(conn, config)
+        if snapshot is None:
+            result["warning"] = "Fetch Octopus tariff pricing in Settings before estimating costs"
+            return result
+        result["fetched_at"] = iso(snapshot["fetched_at_us"])
+        if not total.observed_us:
+            result["warning"] = "No observed energy is available to price"
+            return result
+        rates = await self.store.tariff_rows(conn, snapshot["source"], start, end)
+        cost = PricedThreshold()
+        if source is not None:
+            for left in range(start, end, DAY_US):
+                right = min(end, left + DAY_US)
+                raw = await self.store.raw_rows(conn, device, left, right)
+                ev = await self.store.ev_rows(conn, source, left, right)
+                cost.add_segments(supported_segments(raw, left, right, ev), rates)
+        else:
+            retained = await self.store.retention(conn, device)
+            ends = [row.end for row in rates]
+            async for bucket, metrics in self.scan(conn, device, start, end, budget):
+                if not metrics.above[0]:
+                    continue
+                left = max(start, bucket)
+                if bucket < retained["five_before_us"]:
+                    zone = ZoneInfo(retained["archive_timezone"] or "UTC")
+                    date = datetime.fromisoformat(iso(bucket)).astimezone(zone).date()
+                    right = min(
+                        end,
+                        timestamp_us(
+                            datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
+                        ),
+                    )
+                else:
+                    right = min(end, bucket + BUCKET_US)
+                index = bisect_right(ends, left)
+                rate = rates[index] if index < len(rates) else None
+                if rate is not None and rate.start <= left and rate.end >= right:
+                    cost.add_metrics(metrics, rate)
+                elif left >= retained["raw_before_us"]:
+                    raw = await self.store.raw_rows(conn, device, left, right)
+                    cost.add_segments(supported_segments(raw, left, right), rates)
+        complete = cost.priced_us == total.above[0]
+        result.update(
+            available=complete,
+            energy_when_above_gbp=float(cost.load_gbp) if complete else None,
+            excess_energy_gbp=float(cost.excess_gbp) if complete else None,
+            price_coverage_pct=100 * cost.priced_us / total.above[0] if total.above[0] else 100,
+            priced_seconds_above=cost.priced_us / 1_000_000,
+        )
+        if not complete:
+            result["warning"] = (
+                "Costs unavailable: some observed above-threshold energy lacks applicable "
+                "rates or sufficiently detailed retained readings. " + PRICING_WARNING
+            )
+        return result
 
     async def history(
         self,

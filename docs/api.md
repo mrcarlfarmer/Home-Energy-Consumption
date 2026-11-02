@@ -27,7 +27,7 @@ Dashboard sessions survive routine application/container restarts and expire 12 
 | `POST /api/config/test` | Optional draft key/account/device; absent fields use saved settings, no configuration/readings are saved |
 | `POST /api/home-assistant/test` | Optional draft `home_assistant_url`, `home_assistant_token`, `home_assistant_entity`; checks current power and recent history without saving |
 
-Writable settings: `api_key`, `account_number`, `active_device_id`, `polling_enabled`, `poll_interval_seconds` (30-3,600), `display_timezone` (IANA). Omitted key preserves it, nonempty string replaces it, null clears it only with polling disabled. Optimistic revision conflicts return 409. Saving syntactically valid settings does not silently initiate a connectivity test.
+Writable settings: `api_key`, `account_number`, `active_device_id`, `polling_enabled`, `poll_interval_seconds` (30-3,600), `display_timezone` (IANA), `tariff_pricing_enabled` (default false). Omitted key preserves it, nonempty string replaces it, null clears it only with polling and tariff pricing disabled. Optimistic revision conflicts return 409. Saving syntactically valid settings does not silently initiate a connectivity test.
 
 Optional EV settings are `home_assistant_url` (HTTP(S), no URL credentials/query/
 fragment), `home_assistant_entity` (`sensor.*`, power in W or kW),
@@ -58,6 +58,57 @@ The test discovers all accessible electricity meter candidates. With no selected
 The test endpoint also enforces a 45-second local cooldown before any upstream authentication/discovery calls, preventing repeated clicks from exhausting those fields' quotas.
 
 A successful test of the already saved account/key/device resumes an error-paused collector only if polling was already enabled. Draft tests never replace saved settings or enable disabled collection. Malformed telemetry is rejected; stale source readings are reported as warnings.
+
+## Historical gap recovery
+
+`POST /api/recovery` accepts `expected_revision`, `device_id`, RFC3339 `from`
+and `to`, and returns 202 with `device_id`, actual queued `from`/`to`, and
+`state:"pending"`. It requires the authenticated session/CSRF/Origin protections
+and saved, enabled polling for the active meter. It does not change configuration,
+start polling or use credential drafts.
+
+Requests are limited to retained raw history and at most 31 days back. A boundary
+within one minute of the retention cutoff is clipped to it to accommodate request
+latency. The newest three minutes are excluded to allow for telemetry publication.
+Pending/paused work is merged with the requested range rather than lost.
+Revision conflicts return 409, disabled polling/unsupported ranges/meters return
+422, storage pressure returns 507, and concurrent/repeated requests return 429
+with `Retry-After` (60-second local cooldown).
+
+The existing collector processes the persistent cursor, skipping fully supported
+fifteen-minute windows without upstream calls. Missing windows use the existing
+shared telemetry governor and alternate with live collection. SSE health and
+`GET /api/storage` expose progress, pauses and unavailable windows. Successful
+repairs reconcile old gap records; incomplete/empty/aged-out responses remain
+explicitly unresolved. This retries meter history only, not Home Assistant history.
+
+## Tariff pricing
+
+`GET /api/tariff` returns enabled/state/error status, fetch time, cached range,
+current tariff name/code/schedule, household rate intervals covering the next
+24 hours, and estimate warnings. Each rate has RFC3339 `from`/`to`, `band` and
+`pence_per_kwh` including VAT. Credentials are never returned.
+
+Optional paired `from`/`to` parameters request cached intervals overlapping a
+historical graph range instead (at most 3653 days). Optional `device_id` prevents
+the active tariff from being applied to another meter; a mismatch has no rates.
+These reads do not fetch upstream data or enable pricing. The graph shades only
+returned household `ECO7_NIGHT` intervals, never inferring uncached off-peak times.
+
+`POST /api/tariff/refresh` accepts `{"expected_revision": N}` and uses only saved
+Octopus credentials, account and meter. Fetching does not enable pricing or meter
+polling. It returns the same status shape. Authentication, CSRF and trusted-Origin
+checks apply. Refreshes are serialized and have a local 60-second cooldown.
+Conflicting configuration returns 409; invalid/unsupported tariffs return 422;
+busy/throttled requests return 429; retryable upstream failures return 503;
+exhausted storage returns 507. Safe error codes identify unsupported schedules,
+payment-method-specific feeds, missing rates and upstream errors.
+
+Enabled pricing refreshes every six hours independently of meter collection.
+It caches dated household rates over `min(raw_retention_days,31)` days back and
+two days ahead. Historical agreements are respected. Cache replacement is atomic
+and revision-fenced; failed refreshes preserve the previous cache for intervals
+it actually covers. Account/meter changes invalidate it; key rotation does not.
 
 ## Live stream
 
@@ -106,6 +157,26 @@ state estimation and unreported Home Assistant outages.
 ```
 
 This example represents two fully observed minutes at 8 kW. Null estimates mean insufficient observed duration; a supported zero remains zero. `thresholds` and the configuration's `thresholds_w` remain arrays, each containing only the 6 kW entry.
+
+`GET /api/analytics/daily-peaks` accepts `to`, `timezone`, optional `device_id`
+and `exclude_ev`, using the same authentication and analytical query lane.
+It returns `device_id`, actual `from`/`to`, `timezone`, five `daily_peaks` rows
+with the existing daily-metrics shape, and `warnings`. These are the five calendar
+dates ending at the exclusive `to`; a midnight end includes the preceding day,
+not an empty next day. The latest date can be partial. Archived grid resolution
+may expand it to a whole day. Missing/expired EV history yields unavailable days
+without falling back to whole-meter peaks. The graph displays these rows newest
+first independently of its selected duration.
+
+The summary also contains `pricing`: `enabled`, `available`,
+`energy_when_above_gbp`, `excess_energy_gbp`, `price_coverage_pct`,
+`priced_seconds_above`, `fetched_at` and `warning`. Monetary values are GBP,
+using household import rates including VAT and the selected grid/EV-excluded
+basis. Both are null unless every observed above-threshold interval is priced.
+No observed duration also yields null. Observed periods without exceedance can
+legitimately cost zero. Price coverage is above-threshold duration coverage, not
+overall meter/EV coverage. Standing charges, EV-specific billing adjustments and
+account-specific discounts are excluded; exceeding 6 kW is not itself a penalty.
 
 `GET /api/analytics/history` additionally accepts `interval=auto|1m|5m|15m|30m|1h|6h|1d` and `max_points` (default 1,500, maximum 4,000). An explicit interval that cannot fit the output bound returns 422, rather than silently changing it.
 
