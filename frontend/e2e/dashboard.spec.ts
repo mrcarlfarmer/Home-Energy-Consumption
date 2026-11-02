@@ -11,7 +11,8 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#stream-health")).toHaveText("Dashboard connected");
   await expect(page.locator(".transport-warning")).toContainText("not encrypted in transit");
   await expect(page.locator("#demand")).toHaveText("4");
-  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  await expect(page.locator("#thresholds tr")).toHaveCount(1);
+  await expect(page.locator("#thresholds tr").first()).toContainText("6 kW");
   await expect(page.locator("#chart canvas").first()).toBeVisible();
   await expect(page.locator("#peak")).toHaveText("4 kW");
   await expect(page.locator("#above-6kw-time")).toHaveText("0 s");
@@ -42,7 +43,7 @@ test("protected endpoints, origin checks and missing data presentation", async (
   await page.goto("/");
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  await expect(page.locator("#thresholds tr")).toHaveCount(1);
   await page.locator("#from").fill("2025-01-01T00:00");
   await page.locator("#to").fill("2025-01-02T00:00");
   await page.getByRole("button", { name: "Apply custom range" }).click();
@@ -62,7 +63,6 @@ test("6 kW tile uses summary totals and updates with the selected window", async
     const response = await route.fetch();
     const summary = await response.json();
     summary.observed_seconds = 100000;
-    summary.thresholds.reverse();
     const threshold = summary.thresholds.find((value: { threshold_w: number }) => value.threshold_w === 6000);
     threshold.seconds_above = seconds;
     threshold.energy_when_above_kwh = energy;
@@ -111,6 +111,7 @@ test("live polling controls persist and synchronize without saving credential dr
   await expect(page.getByLabel("Polling interval (seconds)", { exact: true })).toHaveValue("75");
   await expect(page.getByRole("button", { name: "Start polling", exact: true })).toBeEnabled();
   let saved = await (await page.request.get("/api/config")).json();
+  expect(saved.thresholds_w).toEqual([6000]);
   expect(saved.poll_interval_seconds).toBe(75);
   expect(saved.polling_enabled).toBe(false);
   expect(saved.account_number).toBe("A-FIXTURE");
@@ -178,7 +179,7 @@ test("short chart presets request exact windows ending now", async ({ page }) =>
   await page.goto("/");
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.locator("#thresholds tr")).toHaveCount(3);
+  await expect(page.locator("#thresholds tr")).toHaveCount(1);
   for (const [label, minutes] of [["1 hour", 60], ["30 min", 30], ["15 min", 15], ["5 min", 5]] as const) {
     const response = page.waitForResponse(value => {
       const url = new URL(value.url());

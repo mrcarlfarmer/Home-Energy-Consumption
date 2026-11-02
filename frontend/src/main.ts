@@ -114,6 +114,15 @@ function fillSettings(): void {
   deviceOptions(element<HTMLSelectElement>("device"), config.devices, config.active_device_id);
   deviceOptions(element<HTMLSelectElement>("history-device"), config.devices, config.active_device_id);
   text("key-status", config.has_api_key ? "API key saved. Leave blank to keep it." : "No API key saved.");
+  element<HTMLInputElement>("ha-url").value = config.home_assistant_url ?? "";
+  element<HTMLInputElement>("ha-entity").value = config.home_assistant_entity ?? "";
+  element<HTMLInputElement>("ha-token").value = "";
+  element<HTMLInputElement>("ha-enabled").checked = config.home_assistant_enabled;
+  element<HTMLInputElement>("ha-clear-token").checked = false;
+  text("ha-token-status", config.has_home_assistant_token ? "Token saved. Leave blank to keep it." : "No token saved.");
+  const evOption = element<HTMLSelectElement>("analysis-basis").options[1];
+  evOption.disabled = !config.home_assistant_url || !config.home_assistant_entity;
+  if (evOption.disabled) element<HTMLSelectElement>("analysis-basis").value = "grid";
 }
 function draft(): Record<string, unknown> {
   const data: Record<string, unknown> = {
@@ -137,6 +146,8 @@ function setRange(minutes: number): void {
   element<HTMLInputElement>("to").value = localDate(end);
 }
 async function refresh(): Promise<void> {
+  for (const id of ["coverage", "energy", "peak", "above-6kw-time", "above-6kw-energy", "above-6kw-excess"]) text(id, "--");
+  element("thresholds").replaceChildren(); element("days").replaceChildren(); chart?.clear();
   const selected = element<HTMLSelectElement>("history-device").value;
   if (!selected) { text("analysis-status", "Configure a meter to begin collecting history."); return; }
   pending?.abort();
@@ -149,6 +160,18 @@ async function refresh(): Promise<void> {
       ? new Date(end.getTime() - selectedMinutes * 60000)
       : new Date(element<HTMLInputElement>("from").value);
     const query = new URLSearchParams({ from: start.toISOString(), to: end.toISOString(), device_id: selected });
+    const excludeEV = element<HTMLSelectElement>("analysis-basis").value === "exclude-ev";
+    if (excludeEV) query.set("exclude_ev", "true");
+    text("energy-label", excludeEV ? "Estimated non-EV import" : "Estimated import");
+    text("peak-label", excludeEV ? "Derived non-EV peak" : "Sampled peak");
+    text("peak-hint", excludeEV ? "Estimated from aligned readings" : "Highest observed reading");
+    text("coverage-hint", excludeEV ? "Joint meter / Ohme coverage" : "Within the selected window");
+    text("above-6kw-hint", excludeEV ? "Observed within the selected window, excluding EV" : "Observed within the selected window");
+    text("inverter-window", excludeEV ? "EXCLUDING EV / SELECTED WINDOW" : "SELECTED WINDOW");
+    text("days-label", excludeEV ? "Daily derived non-EV peaks" : "Daily sampled peaks");
+    text("analysis-basis-note", excludeEV
+      ? "EV power is subtracted before calculating these estimates. Missing Ohme data is unknown, not zero. Live demand remains whole-meter grid import. EV exclusion requires retained raw history."
+      : "Analytics include all grid import, including EV charging. Choose Excluding EV charging after configuring Home Assistant.");
     text("analysis-status", "Calculating observed demand...");
     const storage = await api<StorageStatus>(`/api/storage?device_id=${encodeURIComponent(selected)}`, undefined, controller.signal);
     const archived = storage.retention && start.getTime() * 1000 < storage.retention.five_before_us;
@@ -167,13 +190,11 @@ async function refresh(): Promise<void> {
     text("analysis-status", `${number(summary.observed_seconds / 3600)} observed hours of ${number(summary.requested_seconds / 3600)}. Chart buckets: ${history.interval_seconds / 60} min. Calendar days: ${timezone}. Range: ${new Date(summary.from).toLocaleString()} - ${new Date(summary.to).toLocaleString()}. Retention: raw ${storage.policy.raw_days} days, five-minute ${storage.policy.five_minute_days} days, daily ${storage.policy.daily_days} days. ${[...new Set([...summary.warnings, ...history.warnings])].join(". ")}`);
     const thresholdBody = element<HTMLTableSectionElement>("thresholds");
     thresholdBody.replaceChildren();
-    for (const value of summary.thresholds) {
-      const row = thresholdBody.insertRow();
-      for (const cell of [
-        `${value.threshold_w / 1000} kW`, `${number(value.time_above_pct)}%`,
-        `${number(value.energy_when_above_kwh, 3)} kWh`, `${number(value.excess_energy_kwh, 3)} kWh`,
-      ]) row.insertCell().textContent = cell;
-    }
+    const row = thresholdBody.insertRow();
+    for (const cell of [
+      `${above6kw.threshold_w / 1000} kW`, `${number(above6kw.time_above_pct)}%`,
+      `${number(above6kw.energy_when_above_kwh, 3)} kWh`, `${number(above6kw.excess_energy_kwh, 3)} kWh`,
+    ]) row.insertCell().textContent = cell;
     const days = element<HTMLTableSectionElement>("days"); days.replaceChildren();
     for (const day of summary.daily_peaks) {
       const row = days.insertRow();
@@ -208,6 +229,18 @@ function connect(): void {
       const measured = snapshot.reading ? new Date(snapshot.reading.read_at).toLocaleString() : "No reading yet";
       text("read-at", `Last measurement: ${measured}`);
       const h = snapshot.health;
+      const ev = snapshot.home_assistant;
+      text("home-assistant-health", ev
+        ? [
+          `Ohme via Home Assistant: ${ev.state.replaceAll("_", " ")}`,
+          ev.power_w !== null ? `${number(ev.power_w / 1000)} kW` : "",
+          ev.reported_at ? `Reported: ${new Date(ev.reported_at).toLocaleTimeString()}` : "",
+          ev.error_code === "home_assistant_freshness_access_denied"
+            ? "Freshness check denied; verify the Home Assistant token and administrator access, then save settings."
+            : ev.error_code?.replaceAll("_", " ") ?? "",
+          ev.recovery_cursor_at ? `Recovering history from ${new Date(ev.recovery_cursor_at).toLocaleString()}` : "",
+        ].filter(Boolean).join(" | ")
+        : "Ohme via Home Assistant: disabled");
       text("collector-health", `${h.polling_state.replaceAll("_", " ")} / ${h.telemetry_state} / storage ${h.storage_state}`);
       element("collector-health").className = h.telemetry_state === "fresh" && h.polling_state === "running" && h.storage_state === "ok" ? "healthy" : "warning";
       text("upstream-health", [
@@ -266,28 +299,31 @@ async function renderDashboard(): Promise<void> {
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
     ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
-    <article><span class="channel">CH.02</span><p>Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
-    <article><span class="channel">CH.03</span><p>Sampled peak</p><strong id="peak">--</strong><small>Highest observed reading</small></article>
-    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small>Within the selected window</small></article>
+    <article><span class="channel">CH.02</span><p id="energy-label">Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
+    <article><span class="channel">CH.03</span><p id="peak-label">Sampled peak</p><strong id="peak">--</strong><small id="peak-hint">Highest observed reading</small></article>
+    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small id="coverage-hint">Within the selected window</small></article>
     <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
-    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Observed within the selected window</small></article></section>
+    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article></section>
     <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
+    <p id="home-assistant-health">Ohme via Home Assistant: disabled</p>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
     <div class="section-heading"><h3>Polling</h3><button id="toggle-polling" type="button">Start polling</button></div>
     <p id="polling-status" role="status"></p>
     <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
     <p id="polling-help" class="note"></p></form></section>
     <section id="history"><div class="section-heading"><div><p class="eyebrow">OBSERVED DEMAND</p><h2>Demand, in detail</h2></div><select id="history-device" aria-label="Historical meter"></select></div>
+    <label>Analysis basis<select id="analysis-basis"><option value="grid">Whole-meter grid import</option><option value="exclude-ev">Excluding EV charging</option></select></label>
+    <p id="analysis-basis-note" class="note"></p>
     <div class="presets"><button data-minutes="5">5 min</button><button data-minutes="15">15 min</button><button data-minutes="30">30 min</button><button data-minutes="60">1 hour</button><button data-minutes="1440">24 hours</button><button data-minutes="10080">7 days</button><button data-minutes="43200">30 days</button></div>
     <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" required></label>
     <label>To (browser local time)<input id="to" type="datetime-local" required></label><button>Apply custom range</button></form>
     <p id="analysis-status" role="status"></p>
     <div id="chart" aria-label="Demand history chart"></div>
     <p class="note">Gaps are unknown, not zero. Incomplete bucket means and incomplete 15-minute windows are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
-    </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span class="local-badge">SELECTED WINDOW</span></div>
+    </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th></tr></thead><tbody id="thresholds"></tbody></table></div>
-    <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 3.68 kW preset is not a G98/G99 compliance assessment.</p>
-    <details><summary>Daily sampled peaks</summary><div class="table-scroll"><table><thead><tr><th>Local date</th><th>Peak demand</th><th>Coverage</th></tr></thead><tbody id="days"></tbody></table></div></details></section>
+    <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 6 kW comparison is not a G98/G99 compliance assessment.</p>
+    <details><summary id="days-label">Daily sampled peaks</summary><div class="table-scroll"><table><thead><tr><th>Local date</th><th>Peak demand</th><th>Coverage</th></tr></thead><tbody id="days"></tbody></table></div></details></section>
     </main><main id="settings-page" hidden><section id="settings-section"><div class="page-heading"><div><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h1>Settings</h1></div></div><form id="settings"><div class="settings-grid">
     <label>Octopus account number<input id="account" autocomplete="off" maxlength="64" placeholder="A-..."></label>
     <label>Electricity meter<select id="device"></select><small>Test account connectivity to discover meters.</small></label>
@@ -295,8 +331,14 @@ async function renderDashboard(): Promise<void> {
     <label>Polling interval (seconds)<input id="interval" type="number" min="30" max="3600" required></label>
     <label>Display / calendar timezone<input id="timezone" required></label>
     <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling first)</label></div></div>
-    <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p></form></section>
-    </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key.</footer></div></div>`;
+    <h2 class="settings-subheading">Ohme via Home Assistant</h2><div class="settings-grid">
+    <label><span id="ha-url-label">Home Assistant URL</span><input id="ha-url" aria-labelledby="ha-url-label" aria-describedby="ha-url-help" type="url" maxlength="512" placeholder="http://homeassistant.local:8123"><small id="ha-url-help">Use an address reachable from this app's container. HTTPS is recommended; HTTP sends the token unencrypted. Redirects are not followed.</small></label>
+    <label><span id="ha-entity-label">Ohme power entity</span><input id="ha-entity" aria-labelledby="ha-entity-label" aria-describedby="ha-entity-help" maxlength="255" placeholder="sensor.ohme_home_pro_power"><small id="ha-entity-help">Power sensor in W or kW, recorded in Home Assistant history.</small></label>
+    <label><span id="ha-token-label">Replace Home Assistant access token</span><input id="ha-token" aria-labelledby="ha-token-label" aria-describedby="ha-token-status" type="password" autocomplete="new-password" maxlength="4096"><small id="ha-token-status"></small></label>
+    <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
+    <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
+    <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
+    </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
   fillSettings(); setRange(1440);
   window.onhashchange = route; route();
   chart = new DemandChart(element("chart"));
@@ -314,6 +356,7 @@ async function renderDashboard(): Promise<void> {
     button.onclick = () => { setRange(Number(button.dataset.minutes)); clearMessage(); void refresh(); };
   }
   element("history-device").onchange = () => { clearMessage(); void refresh(); };
+  element("analysis-basis").onchange = () => { clearMessage(); void refresh(); };
   element<HTMLButtonElement>("toggle-polling").onclick = () => {
     void savePolling({ polling_enabled: !config.polling_enabled });
   };
@@ -327,13 +370,37 @@ async function renderDashboard(): Promise<void> {
       polling_enabled: element<HTMLInputElement>("enabled").checked,
       poll_interval_seconds: Number(element<HTMLInputElement>("interval").value),
       display_timezone: element<HTMLInputElement>("timezone").value.trim(),
+      home_assistant_url: element<HTMLInputElement>("ha-url").value.trim() || null,
+      home_assistant_entity: element<HTMLInputElement>("ha-entity").value.trim() || null,
+      home_assistant_enabled: element<HTMLInputElement>("ha-enabled").checked,
     };
     if (element<HTMLInputElement>("clear-key").checked) data.api_key = null;
+    const homeToken = element<HTMLInputElement>("ha-token").value;
+    if (homeToken) data.home_assistant_token = homeToken;
+    if (element<HTMLInputElement>("ha-clear-token").checked) data.home_assistant_token = null;
     try {
       config = await api<Config>("/api/config", data);
       fillSettings(); text("test-result", "Settings saved.");
       await refresh();
     } catch (error) { showError(error); }
+  };
+  element<HTMLButtonElement>("ha-test").onclick = async () => {
+    const button = element<HTMLButtonElement>("ha-test"); button.disabled = true;
+    clearMessage(); text("ha-test-result", "Testing Home Assistant without saving...");
+    const data: Record<string, unknown> = {
+      home_assistant_url: element<HTMLInputElement>("ha-url").value.trim() || null,
+      home_assistant_entity: element<HTMLInputElement>("ha-entity").value.trim() || null,
+    };
+    const token = element<HTMLInputElement>("ha-token").value;
+    if (token) data.home_assistant_token = token;
+    try {
+      const result = await api<{ power_w: number | null; fresh: boolean; history_available: boolean; warnings: string[] }>("/api/home-assistant/test", data);
+      text("ha-test-result", [
+        `Connected. Power: ${number(result.power_w)} W. Recent history: ${result.history_available ? "available" : "unavailable"}.`,
+        ...result.warnings,
+      ].join(" "));
+    } catch (error) { showError(error); text("ha-test-result", "Home Assistant test did not succeed."); }
+    finally { button.disabled = false; }
   };
   element<HTMLButtonElement>("test").onclick = async () => {
     const button = element<HTMLButtonElement>("test"); button.disabled = true;

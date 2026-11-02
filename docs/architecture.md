@@ -25,7 +25,7 @@ The collector retrieves an overlapping `TEN_SECONDS` window at a default 45-seco
 
 Raw changes mark affected retained five-minute buckets dirty, including the maximum
 supported adjacent-segment range. Maintenance atomically rebuilds coverage, energy,
-sampled peak and three threshold aggregates. Transactional retention replaces old
+sampled peak and the 6 kW threshold aggregate. Transactional retention replaces old
 raw readings with durable five-minute summaries, then local-day archives before
 eventual expiry. Archived summaries are not rebuildable after their source expires.
 Persistent per-meter cursors drive rate-governed historical recovery independently

@@ -7,7 +7,8 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - Live grid demand and separate collection, freshness, storage and connection indicators over SSE.
 - Responsive dark instrument-console UI with a midnight/lavender palette, ice-blue charts and direct navigation to history, inverter comparisons and settings.
 - 24-hour, 7-day, 30-day and custom history, sampled peaks and trailing 15-minute demand.
-- Inverter comparisons at 3.68, 5 and 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
+- Reference comparison at 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
+- Optional Ohme power history from Home Assistant, with a separate EV-excluded analysis view and joint-data coverage.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
 - Always-on collection, restart-safe gap recovery, bounded storage, 30-day raw / 396-day five-minute / ten-year daily history, and gap/coverage reporting with local-calendar/DST handling.
 - ARM64/AMD64 multi-stage builds, hash-locked dependencies and a 140 MiB container memory guardrail.
@@ -34,6 +35,46 @@ setting `ENERGY_DATA_DIRECTORY` for Compose.
 5. Open your configured HTTPS address on port 8443, sign in and enter your Octopus API key/account. Test connectivity to discover the electricity meter, select it, then save with polling enabled.
 
 The device ID is the **electricity smart meter EUI-64**, not the Home Mini serial number. Polling defaults to 45 seconds. No port forwarding or external dashboard service is required.
+
+## Excluding EV charging with Home Assistant
+
+If the Ohme integration is already configured in Home Assistant:
+
+1. Find its **Power** entity under **Developer tools > States** (for example
+   `sensor.ohme_home_pro_power`). The unit must be W or kW. Ensure Recorder includes
+   the entity; Home Assistant normally retains detailed history for ten days.
+2. Create a long-lived access token under your Home Assistant profile's
+   **Security** tab. An administrator token is required when the dashboard needs
+   to verify a stale cached timestamp. Treat it as a credential; do not put it in
+   Git or screenshots.
+3. In this dashboard's **Settings > Ohme via Home Assistant**, enter the Home
+   Assistant URL, entity ID and token. Use a URL reachable from the energy
+   monitor's container, such as the Home Assistant LAN IP. Container localhost is
+   not your Home Assistant host, and `.local` discovery may not work in Docker.
+4. Select **Test Home Assistant** to check power and recent history without
+   saving. Enable **Collect Ohme power history** and **Save settings**.
+5. In the overview, choose **Analysis basis > Excluding EV charging**. The live
+   card stays whole-meter grid demand; history, coverage, peaks and inverter
+   threshold totals use the selected basis.
+
+Home Assistant collection is independent of Octopus polling and runs every 60
+seconds. It reads current freshness and recent history, then gradually backfills
+in fifteen-minute chunks. Initial lookback uses `APP_RECOVERY_LOOKBACK_DAYS`
+(default one day); persisted recovery resumes after restart, limited to raw
+retention. Watch collection health and joint coverage while backfill progresses.
+No charging controls or Home Assistant mutations are issued.
+
+EV exclusion is an estimate based on recorded power changes, not a household
+submeter. Missing/unavailable EV history is unknown, not zero. Unreported Home
+Assistant outages can leave stale recorded states. Adjusted analysis is limited
+to the selected active meter's retained raw readings (normally 30 days); older
+grid-only aggregates cannot be subtracted accurately. Solar/batteries can still
+make non-EV grid import lower than actual household load.
+
+The Home Assistant token stays in the backend database and private backups,
+never in browser responses. HTTPS is recommended for both connections; HTTP
+sends credentials unencrypted. Keep dashboard access restricted and protect
+backups.
 
 ## Documentation
 

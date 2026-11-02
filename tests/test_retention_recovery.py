@@ -32,7 +32,7 @@ async def drain(store: Store, at: int) -> None:
 
 async def test_raw_retention_preserves_integrals_and_boundary_context(store: Store) -> None:
     start = timestamp_us("2026-01-01T00:00:00Z")
-    await store.ingest(DEVICE, readings(start, 1800), 2)
+    await store.ingest(DEVICE, readings(start, 1800, 8000), 2)
     api = Analytics(store)
     before = await api.summary(start, start + 1800_000_000, "Europe/London")
     await drain(store, start + 31 * DAY_US)
@@ -53,7 +53,7 @@ async def test_raw_retention_preserves_integrals_and_boundary_context(store: Sto
     history = await api.history(start + 1, start + 1800_000_000 - 1, "auto", 1500)
     assert history["interval_seconds"] == 300
     assert history["from"] == iso(start)
-    assert history["series"]["mean_import_w"] == [4000] * 6
+    assert history["series"]["mean_import_w"] == [8000] * 6
     with pytest.raises(ValueError, match="five minutes"):
         await api.history(start, start + 1800_000_000, "1m", 1500)
     await store.rebuild()
@@ -76,8 +76,9 @@ async def test_daily_archive_dst_and_expiry(
     hours: int,
 ) -> None:
     start, end = timestamp_us(left), timestamp_us(right)
-    await store.ingest(DEVICE, readings(start, 600), 2)
+    await store.ingest(DEVICE, readings(start, 600, 8000), 2)
     before = await Analytics(store).summary(start, end, "Europe/London")
+    assert before["thresholds"][0]["time_above_pct"] == 100
     await drain(store, end + 397 * DAY_US)
     api = Analytics(store)
     after = await api.summary(start, end, "Europe/London")

@@ -15,11 +15,14 @@ from zoneinfo import ZoneInfo
 import aiosqlite
 
 from app.analytics.intervals import Metrics, integrate
+from app.home_assistant import ev_source
 from app.models import (
     ALGORITHM_VERSION,
     BUCKET_US,
     GAP_US,
+    THRESHOLDS,
     ConfigUpdate,
+    EVInterval,
     Reading,
     iso,
     now_us,
@@ -88,7 +91,13 @@ class Store:
                     )
                     self.page_limit = self.policy.budget_bytes * 3 // 4 // page_size
                     version = (await one(conn, "PRAGMA user_version"))[0]
-                    migrations = ("001_initial.sql", "002_sessions.sql", "003_retention.sql")
+                    migrations = (
+                        "001_initial.sql",
+                        "002_sessions.sql",
+                        "003_retention.sql",
+                        "004_home_assistant.sql",
+                        "005_six_kw_threshold.sql",
+                    )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
                     for filename in migrations[version:]:
@@ -141,9 +150,11 @@ class Store:
         async with self.read() as conn:
             result = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
             result["has_api_key"] = bool(result.pop("octopus_api_key"))
+            result["has_home_assistant_token"] = bool(result.pop("home_assistant_token"))
             result.pop("singleton")
             result["polling_enabled"] = bool(result["polling_enabled"])
-            result["thresholds_w"] = [3680, 5000, 6000]
+            result["home_assistant_enabled"] = bool(result["home_assistant_enabled"])
+            result["thresholds_w"] = list(THRESHOLDS)
             async with conn.execute(
                 "SELECT device_id,label FROM devices ORDER BY created_at_us"
             ) as cur:
@@ -159,11 +170,14 @@ class Store:
                 value = getattr(update, field)
                 if field == "api_key":
                     config["octopus_api_key"] = value.get_secret_value() if value else None
+                elif field == "home_assistant_token":
+                    config[field] = value.get_secret_value() if value else None
                 else:
                     if value is None and field in {
                         "polling_enabled",
                         "poll_interval_seconds",
                         "display_timezone",
+                        "home_assistant_enabled",
                     }:
                         raise ValueError(f"{field} cannot be null")
                     config[field] = value
@@ -171,6 +185,18 @@ class Store:
                 config[x] for x in ("octopus_api_key", "account_number", "active_device_id")
             ):
                 raise ValueError("An API key, account and device are required to enable polling")
+            if config["home_assistant_enabled"] and not all(
+                config[x]
+                for x in (
+                    "home_assistant_url",
+                    "home_assistant_token",
+                    "home_assistant_entity",
+                    "active_device_id",
+                )
+            ):
+                raise ValueError(
+                    "Home Assistant URL, token, power entity and meter are required to enable EV collection"
+                )
             if config["active_device_id"]:
                 if not config["account_number"]:
                     raise ValueError("An account is required for the selected device")
@@ -187,6 +213,7 @@ class Store:
             await conn.execute(
                 "UPDATE app_config SET revision=revision+1,account_number=?,active_device_id=?,"
                 "octopus_api_key=?,polling_enabled=?,poll_interval_seconds=?,display_timezone=?,"
+                "home_assistant_url=?,home_assistant_token=?,home_assistant_entity=?,home_assistant_enabled=?,"
                 "updated_at_us=? WHERE singleton=1",
                 tuple(
                     config[x]
@@ -197,6 +224,10 @@ class Store:
                         "polling_enabled",
                         "poll_interval_seconds",
                         "display_timezone",
+                        "home_assistant_url",
+                        "home_assistant_token",
+                        "home_assistant_entity",
+                        "home_assistant_enabled",
                     )
                 )
                 + (now_us(),),
@@ -512,6 +543,88 @@ class Store:
     async def raw_metrics(conn: aiosqlite.Connection, device: str, start: int, end: int) -> Metrics:
         return integrate(await Store.raw_rows(conn, device, start, end), start, end)
 
+    async def ev_cursor(self, source: str) -> int | None:
+        async with (
+            self.read() as conn,
+            conn.execute("SELECT cursor_us FROM ev_sync WHERE source=?", (source,)) as cur,
+        ):
+            row = await cur.fetchone()
+            return int(row[0]) if row else None
+
+    async def save_ev_history(
+        self,
+        config: dict[str, Any],
+        start: int,
+        end: int,
+        intervals: list[EVInterval],
+        *,
+        cursor: int | None = None,
+    ) -> int:
+        if (
+            not 0 <= start < end <= start + 900_000_000
+            or not intervals
+            or intervals[0].start != start
+            or intervals[-1].end != end
+            or any(r.start >= r.end for r in intervals)
+            or any(a.end != b.start for a, b in zip(intervals, intervals[1:], strict=False))
+        ):
+            raise ValueError("EV history must cover a bounded contiguous requested window")
+        source, device = ev_source(config), config["active_device_id"]
+        async with self.write() as conn:
+            saved = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+            if saved["revision"] != config["revision"] or not saved["home_assistant_enabled"]:
+                return 0
+            async with conn.execute(
+                "SELECT start_us,end_us,power_mw FROM ev_intervals "
+                "WHERE source=? AND start_us<? AND end_us>? ORDER BY start_us",
+                (source, end, start),
+            ) as cur:
+                old = await cur.fetchall()
+            changed = [
+                EVInterval(max(start, row[0]), min(end, row[1]), row[2]) for row in old
+            ] != intervals
+            if changed:
+                await conn.execute(
+                    "DELETE FROM ev_intervals WHERE source=? AND start_us<? AND end_us>?",
+                    (source, end, start),
+                )
+                replacements = list(intervals)
+                for row in old:
+                    if row[0] < start:
+                        replacements.append(EVInterval(row[0], start, row[2]))
+                    if row[1] > end:
+                        replacements.append(EVInterval(end, row[1], row[2]))
+                await conn.executemany(
+                    "INSERT INTO ev_intervals VALUES(?,?,?,?,?)",
+                    [(source, device, r.start, r.end, r.power_mw) for r in replacements],
+                )
+                await conn.execute(
+                    "UPDATE devices SET data_version=data_version+1 WHERE device_id=?", (device,)
+                )
+            if cursor is not None:
+                await conn.execute(
+                    "INSERT INTO ev_sync VALUES(?,?,?) ON CONFLICT(source) "
+                    "DO UPDATE SET cursor_us=MAX(cursor_us,excluded.cursor_us)",
+                    (source, device, cursor),
+                )
+            return len(intervals) if changed else 0
+
+    @staticmethod
+    async def ev_rows(
+        conn: aiosqlite.Connection, source: str, start: int, end: int
+    ) -> list[EVInterval]:
+        result: list[EVInterval] = []
+        async with conn.execute(
+            "SELECT start_us,end_us,power_mw FROM ev_intervals "
+            "WHERE source=? AND start_us>=? AND start_us<? AND end_us>? ORDER BY start_us",
+            (source, start - 900_000_000, end, start),
+        ) as cur:
+            while rows := await cur.fetchmany(256):
+                result.extend(EVInterval(row[0], row[1], row[2]) for row in rows)
+                if len(result) > 50_000:
+                    raise ValueError("Unexpected EV source density exceeds query budget")
+        return result
+
     async def rebuild(self, limit: int = 24) -> int:
         count = 0
         for _ in range(limit):
@@ -558,7 +671,7 @@ class Store:
             "INSERT INTO rollup_threshold_5m VALUES(?,?,?,?,?,?)",
             [
                 (device, start, t, m.above[j], m.load[j], m.excess[j])
-                for j, t in enumerate((3680, 5000, 6000))
+                for j, t in enumerate(THRESHOLDS)
             ],
         )
         await conn.execute(
@@ -575,9 +688,9 @@ class Store:
             invalid=row["invalid_sample_count"],
             peak_mw=row["peak_import_mw"],
             peak_at=row["peak_at_us"],
-            above=[row[f"a{j}"] for j in range(3)],
-            load=[row[f"l{j}"] for j in range(3)],
-            excess=[row[f"e{j}"] for j in range(3)],
+            above=[row["a0"]],
+            load=[row["l0"]],
+            excess=[row["e0"]],
         )
 
     async def compact(self, limit: int = 24, at: int | None = None) -> int:
@@ -672,16 +785,13 @@ class Store:
                         raise RuntimeError("Cannot archive dirty historical buckets")
                     m = Metrics()
                     async with conn.execute(
-                        "SELECT r.*,t0.above_us a0,t0.load_above_watt_seconds l0,t0.excess_watt_seconds e0,"
-                        "t1.above_us a1,t1.load_above_watt_seconds l1,t1.excess_watt_seconds e1,"
-                        "t2.above_us a2,t2.load_above_watt_seconds l2,t2.excess_watt_seconds e2 "
+                        "SELECT r.*,t.above_us a0,t.load_above_watt_seconds l0,"
+                        "t.excess_watt_seconds e0 "
                         "FROM rollup_5m r "
-                        "JOIN rollup_threshold_5m t0 USING(device_id,bucket_start_us) "
-                        "JOIN rollup_threshold_5m t1 USING(device_id,bucket_start_us) "
-                        "JOIN rollup_threshold_5m t2 USING(device_id,bucket_start_us) "
+                        "JOIN rollup_threshold_5m t USING(device_id,bucket_start_us) "
                         "WHERE r.device_id=? AND bucket_start_us>=? AND bucket_start_us<? "
-                        "AND t0.threshold_w=3680 AND t1.threshold_w=5000 AND t2.threshold_w=6000",
-                        (device, start, end),
+                        "AND t.threshold_w=?",
+                        (device, start, end, THRESHOLDS[0]),
                     ) as cur:
                         rows = list(await cur.fetchall())
                     expected = (
@@ -738,6 +848,21 @@ class Store:
             await conn.execute(
                 "DELETE FROM recovery_gaps WHERE end_us<?",
                 (at - self.policy.daily_days * DAY_US,),
+            )
+            async with conn.execute(
+                "SELECT DISTINCT device_id FROM ev_intervals WHERE end_us<=?", (raw_cutoff,)
+            ) as cur:
+                ev_devices = await cur.fetchall()
+            await conn.execute("DELETE FROM ev_intervals WHERE end_us<=?", (raw_cutoff,))
+            for ev_device in ev_devices:
+                await conn.execute(
+                    "UPDATE devices SET data_version=data_version+1 WHERE device_id=?",
+                    (ev_device[0],),
+                )
+            await conn.execute(
+                "DELETE FROM ev_sync WHERE source NOT IN (SELECT DISTINCT source FROM ev_intervals) "
+                "AND cursor_us<?",
+                (raw_cutoff,),
             )
         self.last_maintenance_at = iso(at)
         return count

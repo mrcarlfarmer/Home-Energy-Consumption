@@ -7,9 +7,19 @@ from zoneinfo import ZoneInfo
 
 import aiosqlite
 
-from app.analytics.intervals import Metrics, integrate
+from app.analytics.intervals import Metrics, integrate, integrate_without_ev
 from app.db.store import Store, one
-from app.models import ALGORITHM_VERSION, BUCKET_US, GAP_US, THRESHOLDS, iso, timestamp_us
+from app.home_assistant import ev_source
+from app.models import (
+    ALGORITHM_VERSION,
+    BUCKET_US,
+    GAP_US,
+    THRESHOLDS,
+    EVInterval,
+    iso,
+    timestamp_us,
+)
+from app.storage import DAY_US
 
 INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "6h": 21600, "1d": 86400}
 METHOD = {
@@ -19,6 +29,15 @@ METHOD = {
     "max_gap_seconds": 30,
     "algorithm_version": ALGORITHM_VERSION,
 }
+EV_METHOD = {
+    **METHOD,
+    "power_basis": "nonnegative_grid_import_excluding_ev",
+    "integration": "meter_previous_sample_hold_minus_recorded_ev_state_hold",
+}
+EV_WARNINGS = [
+    "EV exclusion is a recorded-state estimate, not total household load",
+    "Unreported Home Assistant outages may leave stale recorded states; unavailable states are excluded",
+]
 
 
 class Rebuilding(Exception):
@@ -118,6 +137,25 @@ class Analytics:
             warnings.append("Some requested history has expired under the retention policy")
         return start, end, state, warnings
 
+    async def ev_selection(
+        self, conn: aiosqlite.Connection, device: str, start: int, end: int, exclude_ev: bool
+    ) -> str | None:
+        if not exclude_ev:
+            return None
+        config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+        if device != config["active_device_id"] or not all(
+            config[x] for x in ("home_assistant_url", "home_assistant_entity")
+        ):
+            raise ValueError(
+                "Configure Home Assistant for the selected meter to exclude EV charging"
+            )
+        retained = await self.store.retention(conn, device)
+        if start < retained["raw_before_us"] or end - start > self.store.policy.raw_days * DAY_US:
+            raise ValueError(
+                "EV exclusion requires retained raw readings; select a range within raw retention"
+            )
+        return ev_source(config, device)
+
     async def scan(
         self,
         conn: aiosqlite.Connection,
@@ -145,18 +183,16 @@ class Analytics:
           UNION SELECT bucket_start_us FROM dirty_rollup_buckets WHERE device_id=? AND bucket_start_us>=? AND bucket_start_us<?
         )
         SELECT k.bucket_start_us AS bucket, r.*, d.bucket_start_us AS dirty,
-          t0.above_us AS a0,t0.load_above_watt_seconds AS l0,t0.excess_watt_seconds AS e0,
-          t1.above_us AS a1,t1.load_above_watt_seconds AS l1,t1.excess_watt_seconds AS e1,
-          t2.above_us AS a2,t2.load_above_watt_seconds AS l2,t2.excess_watt_seconds AS e2
+          t.above_us AS a0,t.load_above_watt_seconds AS l0,t.excess_watt_seconds AS e0
         FROM keys k
         LEFT JOIN rollup_5m r ON r.device_id=? AND r.bucket_start_us=k.bucket_start_us
         LEFT JOIN dirty_rollup_buckets d ON d.device_id=? AND d.bucket_start_us=k.bucket_start_us
-        LEFT JOIN rollup_threshold_5m t0 ON t0.device_id=r.device_id AND t0.bucket_start_us=r.bucket_start_us AND t0.threshold_w=3680
-        LEFT JOIN rollup_threshold_5m t1 ON t1.device_id=r.device_id AND t1.bucket_start_us=r.bucket_start_us AND t1.threshold_w=5000
-        LEFT JOIN rollup_threshold_5m t2 ON t2.device_id=r.device_id AND t2.bucket_start_us=r.bucket_start_us AND t2.threshold_w=6000
+        LEFT JOIN rollup_threshold_5m t ON t.device_id=r.device_id AND t.bucket_start_us=r.bucket_start_us AND t.threshold_w=?
         ORDER BY k.bucket_start_us
         """
-        async with conn.execute(sql, (device, left, end, device, left, end, device, device)) as cur:
+        async with conn.execute(
+            sql, (device, left, end, device, left, end, device, device, THRESHOLDS[0])
+        ) as cur:
             while rows := await cur.fetchmany(128):
                 for row in rows:
                     bucket = int(row["bucket"])
@@ -167,7 +203,7 @@ class Analytics:
                             row["algorithm_version"] != ALGORITHM_VERSION
                             and bucket >= state["raw_before_us"]
                         )
-                        or any(row[f"a{j}"] is None for j in range(3))
+                        or row["a0"] is None
                         or a != bucket
                         or b != bucket + BUCKET_US
                     ):
@@ -193,7 +229,15 @@ class Analytics:
         start: int,
         end: int,
         budget: list[int],
+        source: str | None = None,
     ) -> Metrics:
+        if source is not None:
+            return integrate_without_ev(
+                await self.store.raw_rows(conn, device, start, end),
+                await self.store.ev_rows(conn, source, start, end),
+                start,
+                end,
+            )
         result = Metrics()
         async for _, m in self.scan(conn, device, start, end, budget):
             result.merge(m)
@@ -205,6 +249,7 @@ class Analytics:
         end: int,
         timezone: str,
         selected: str | None = None,
+        exclude_ev: bool = False,
     ) -> dict[str, Any]:
         zone = ZoneInfo(timezone)
         days: list[dict[str, Any]] = []
@@ -212,6 +257,7 @@ class Analytics:
         budget = [120]
         async with self.store.read() as conn:
             device, version = await self.device(conn, selected)
+            source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, _, warnings = await self.retained_range(
                 conn,
                 device,
@@ -224,7 +270,7 @@ class Analytics:
             while left < end:
                 midnight = datetime.combine(date + timedelta(days=1), time(), zone).astimezone(UTC)
                 right = min(end, timestamp_us(midnight.isoformat()))
-                m = await self.aggregate(conn, device, left, right, budget)
+                m = await self.aggregate(conn, device, left, right, budget, source)
                 total.merge(m)
                 days.append(
                     {
@@ -256,8 +302,9 @@ class Analytics:
             **describe(total, end - start),
             "thresholds": thresholds,
             "daily_peaks": days,
-            "method": METHOD,
+            "method": EV_METHOD if source is not None else METHOD,
             "warnings": warnings
+            + (EV_WARNINGS if source is not None else [])
             + (["Incomplete telemetry coverage"] if total.observed_us < end - start else []),
         }
 
@@ -268,6 +315,7 @@ class Analytics:
         interval: str,
         maximum: int,
         selected: str | None = None,
+        exclude_ev: bool = False,
     ) -> dict[str, Any]:
         step = interval_for(start, end, interval, maximum)
         series: dict[str, list[float | None]] = {
@@ -287,6 +335,7 @@ class Analytics:
         budget = [120]
         async with self.store.read() as conn:
             device, version = await self.device(conn, selected)
+            source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, retained, warnings = await self.retained_range(conn, device, start, end)
             daily = start < retained["five_before_us"]
             if daily:
@@ -317,12 +366,41 @@ class Analytics:
                 )
             raw = (
                 await self.store.raw_rows(conn, device, start - 900_000_000, end)
-                if step < BUCKET_US
+                if step < BUCKET_US and source is None
                 else None
             )
             times = [r[0] for r in raw] if raw is not None else []
+            ev_raw: list[tuple[int, int | None]] = []
+            ev_intervals: list[EVInterval] = []
+            ev_times: list[int] = []
+            ev_starts: list[int] = []
+            ev_ends: list[int] = []
+            cache_left, cache_right = 0, 0
 
             async def metric(a: int, b: int) -> Metrics:
+                nonlocal ev_raw, ev_intervals, ev_times, cache_left, cache_right
+                nonlocal ev_starts, ev_ends
+                if source is not None:
+                    if a < retained["raw_before_us"]:
+                        return Metrics()
+                    if not cache_left <= a < b <= cache_right:
+                        cache_left = max(retained["raw_before_us"], a - 900_000_000)
+                        cache_right = max(b, min(end, a + DAY_US))
+                        ev_raw = await self.store.raw_rows(conn, device, cache_left, cache_right)
+                        ev_times = [r[0] for r in ev_raw]
+                        ev_intervals = await self.store.ev_rows(
+                            conn, source, cache_left, cache_right
+                        )
+                        ev_starts = [r.start for r in ev_intervals]
+                        ev_ends = [r.end for r in ev_intervals]
+                    return integrate_without_ev(
+                        ev_raw[
+                            bisect_left(ev_times, a - GAP_US) : bisect_right(ev_times, b + GAP_US)
+                        ],
+                        ev_intervals[bisect_right(ev_ends, a) : bisect_left(ev_starts, b)],
+                        a,
+                        b,
+                    )
                 if raw is not None:
                     return integrate(
                         raw[bisect_left(times, a - GAP_US) : bisect_right(times, b + GAP_US)], a, b
@@ -358,8 +436,9 @@ class Analytics:
             "bucket_alignment": retained["archive_timezone"] if daily else "UTC",
             "rolling_evaluation": "bucket_end",
             "series": series,
-            "method": METHOD,
+            "method": EV_METHOD if source is not None else METHOD,
             "warnings": warnings
+            + (EV_WARNINGS if source is not None else [])
             + ["Peaks are sampled grid import, not continuous household load"]
             + (["Trailing 15-minute demand is unavailable in daily archives"] if daily else []),
         }

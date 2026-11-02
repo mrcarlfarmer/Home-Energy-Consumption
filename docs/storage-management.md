@@ -15,6 +15,13 @@ The filesystem also prevents a forgotten backup inside `/data` from growing outs
 the allocation. Keep backups on separate protected storage with their own quota and
 finite retention. Container logs remain independently capped by the supplied stacks.
 
+On first startup, the 6 kW-only schema upgrade preserves existing 6 kW five-minute
+and daily summaries and their other metrics, while removing the former 3.68 kW and
+5 kW aggregates. The migration is transactional and fails rather than rewriting a
+malformed daily archive. It needs temporary database/WAL headroom. Take a consistent
+backup before upgrading; older application versions reject the upgraded schema, so
+rolling back requires restoring that backup.
+
 ## Prepare a new bounded filesystem on the Pi
 
 Take a consistent backup first, then stop the old container. These commands run on
@@ -86,6 +93,15 @@ temporary test databases; the deployment stacks explicitly enable it.
 Daily retention expires whole days, so a boundary day may remain slightly longer.
 Increasing retention later cannot recover data already deleted.
 
+Optional Home Assistant EV intervals and their recovery cursors share this
+database and capacity guard. Intervals expire at raw retention; no EV-adjusted
+five-minute or daily archive is fabricated. EV-excluded analytics therefore
+require retained raw meter history. The Home Assistant token is private
+configuration in the database and is included in backups, like the Octopus key.
+Protect backups accordingly. Initial Home Assistant recovery uses
+`APP_RECOVERY_LOOKBACK_DAYS`; a persisted cursor resumes after restart, bounded
+by raw retention and whatever Recorder history Home Assistant still has.
+
 SQLite's main database is limited to 75% of the budget using `max_page_count`.
 Before ingestion, the app checks total database/sidecar size, filesystem free space,
 and available/reusable SQLite pages. It pauses collection at 90% total usage, below
@@ -108,7 +124,7 @@ or deletes unsummarized data. Summary writes, source deletion and per-meter wate
 are transactional; failure rolls back that batch and is logged/exposed.
 
 Five-minute and daily summaries preserve observed duration, import integral, sample
-and invalid counts, sampled peak/time, and all three inverter-threshold integrals.
+and invalid counts, sampled peak/time, and the 6 kW threshold integrals.
 They are not averages of averages. Unsupported time remains unknown.
 Small raw boundary context and the latest reading per meter are retained for
 integration and stale-reading status. They are not a substitute for expired history.

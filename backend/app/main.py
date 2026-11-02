@@ -21,11 +21,21 @@ from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.analytics.service import Analytics, Rebuilding, bounds
-from app.api_models import AuthState, Connectivity, History, PublicConfig, Snapshot, Summary
+from app.api_models import (
+    AuthState,
+    Connectivity,
+    History,
+    HomeAssistantConnectivity,
+    PublicConfig,
+    Snapshot,
+    Summary,
+)
 from app.auth import COOKIE, SESSION_SECONDS, Auth, Session, hash_password
 from app.db.store import Conflict, Store, one
+from app.ev_collector import EVCollector
+from app.home_assistant import HomeAssistant, HomeAssistantError
 from app.kraken import Kraken, KrakenError
-from app.models import ConfigUpdate, Login, Reading, TestConfig, iso, now_us
+from app.models import ConfigUpdate, HomeAssistantTest, Login, Reading, TestConfig, iso, now_us
 from app.poller import Poller
 from app.settings import Settings
 from app.streaming import Hub
@@ -121,10 +131,17 @@ class SecurityMiddleware:
         await self.app(scope, receive, secured)
 
 
-def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
+def create_app(
+    settings: Settings,
+    client: Kraken | None = None,
+    home_client: HomeAssistant | None = None,
+) -> FastAPI:
     store, hub = Store(settings.database), Hub()
     kraken = client or Kraken()
     poller, analytics = Poller(store, kraken, hub), Analytics(store)
+    home_assistant = home_client or HomeAssistant()
+    ev_collector = EVCollector(store, home_assistant, poller.publish)
+    poller.ev_health = ev_collector.health
     analysis_lock, test_lock = asyncio.Lock(), asyncio.Lock()
     next_test = 0.0
     anonymous_csrf = secrets.token_urlsafe(32)
@@ -170,6 +187,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
                     asyncio.create_task(poller.run()),
                     asyncio.create_task(store.maintenance()),
                     asyncio.create_task(poller.health_timer()),
+                    asyncio.create_task(ev_collector.run()),
                 ]
                 if settings.auth_required:
                     tasks.append(asyncio.create_task(app.state.auth.watch_password()))
@@ -182,6 +200,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await kraken.close()
+            await home_assistant.close()
             await store.close()
 
     app = FastAPI(
@@ -193,6 +212,7 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.store, app.state.poller, app.state.hub = store, poller, hub
+    app.state.ev_collector = ev_collector
     app.add_middleware(SecurityMiddleware, settings=settings)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -289,7 +309,67 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         except ValueError as exc:
             raise Problem(422, "invalid_config", str(exc)) from exc
         await poller.reconfigure()
+        await ev_collector.reconfigure()
         return await store.public_config()
+
+    @app.post("/api/home-assistant/test", response_model=HomeAssistantConnectivity)
+    async def test_home_assistant(data: HomeAssistantTest, session: SessionDep) -> dict[str, Any]:
+        nonlocal next_test
+        if test_lock.locked():
+            raise Problem(429, "test_busy", "A connectivity test is already running", 30)
+        async with test_lock:
+            at = asyncio.get_running_loop().time()
+            if next_test > at:
+                raise Problem(
+                    429,
+                    "test_throttled",
+                    "Please wait before another connectivity test",
+                    math.ceil(next_test - at),
+                )
+            config = await store.config()
+            for field in data.model_fields_set:
+                value = getattr(data, field)
+                config[field] = (
+                    value.get_secret_value()
+                    if field == "home_assistant_token" and value is not None
+                    else value
+                )
+            if not all(
+                config[x]
+                for x in ("home_assistant_url", "home_assistant_token", "home_assistant_entity")
+            ):
+                raise Problem(
+                    422,
+                    "missing_home_assistant_config",
+                    "Home Assistant URL, token and power entity are required",
+                )
+            next_test = at + 45
+            try:
+                latest = await home_assistant.latest(config)
+                end = now_us()
+                intervals = await home_assistant.history(config, max(0, end - 180_000_000), end)
+                available = any(row.power_mw is not None for row in intervals)
+                warnings = []
+                if not latest["fresh"]:
+                    warnings.append(
+                        "Power is unavailable or not reported within the last two minutes"
+                    )
+                if not available:
+                    warnings.append("No usable recent power history; check Home Assistant Recorder")
+                return {**latest, "history_available": available, "warnings": warnings}
+            except HomeAssistantError as exc:
+                if exc.code == "home_assistant_freshness_access_denied":
+                    raise Problem(
+                        422,
+                        exc.code,
+                        "Home Assistant denied the freshness check; verify the token and "
+                        "administrator access, then save settings",
+                    ) from exc
+                raise Problem(
+                    503 if exc.retryable else 422,
+                    exc.code,
+                    "Home Assistant connectivity test failed",
+                ) from exc
 
     @app.post("/api/config/test", response_model=Connectivity)
     async def test_config(data: TestConfig, session: SessionDep) -> dict[str, Any]:
@@ -427,10 +507,11 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         to: str,
         timezone: str = "Europe/London",
         device_id: str | None = None,
+        exclude_ev: bool = False,
     ) -> dict[str, Any]:
         async def operation() -> dict[str, Any]:
             a, b = bounds(start, to)
-            return await analytics.summary(a, b, timezone, device_id)
+            return await analytics.summary(a, b, timezone, device_id, exclude_ev)
 
         return await analytical(operation)
 
@@ -442,10 +523,11 @@ def create_app(settings: Settings, client: Kraken | None = None) -> FastAPI:
         interval: str = "auto",
         max_points: int = 1500,
         device_id: str | None = None,
+        exclude_ev: bool = False,
     ) -> dict[str, Any]:
         async def operation() -> dict[str, Any]:
             a, b = bounds(start, to)
-            return await analytics.history(a, b, interval, max_points, device_id)
+            return await analytics.history(a, b, interval, max_points, device_id, exclude_ev)
 
         return await analytical(operation)
 

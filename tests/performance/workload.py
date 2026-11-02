@@ -69,7 +69,8 @@ async def run(
                             lengths = {len(values) for values in data["series"].values()}
                             assert len(lengths) == 1 and next(iter(lengths)) <= 1500
                         else:
-                            assert len(data["thresholds"]) == 3
+                            assert len(data["thresholds"]) == 1
+                            assert data["thresholds"][0]["threshold_w"] == 6000
                             assert data["sampled_peak_w"] == 6200
                             assert 0 < data["coverage_pct"] <= 100
                         elapsed.append(time.perf_counter() - start)

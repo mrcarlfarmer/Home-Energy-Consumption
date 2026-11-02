@@ -49,7 +49,7 @@ The following checks were completed on 2026-10-03:
 - A full-year consistent backup passed SQLite integrity checking. Starting the application from that backup preserved its password, configuration, device history and analytics. Graceful shutdown returned exit code 0.
 - The public device-discovery query returned the expected authentication-required error, without schema-validation errors. This is not a credentialed account test.
 
-The resource run used Docker Desktop 29.5.2 on a Windows host, an x86_64 Linux container, Python 3.12.15 and SQLite 3.40.1. The initial synthetic database held **3,153,601 raw readings** and five-minute/threshold rollups, using **706,015,232 bytes**. Its cumulative counters were null, so this size is not a general prediction for real telemetry.
+The historical resource run used Docker Desktop 29.5.2 on a Windows host, an x86_64 Linux container, Python 3.12.15 and SQLite 3.40.1. It predates the 6 kW-only storage migration. The initial synthetic database held **3,153,601 raw readings** and five-minute/threshold rollups, using **706,015,232 bytes**. Its cumulative counters were null, so this size is not a general prediction for real telemetry or the current schema.
 
 The final workload ran the real collector and maintenance tasks with a **synthetic HTTP transport**, while four authenticated SSE clients and sequential analytical queries ran over HTTPS. Database data versions changed from 4 to 5 during the workload, explicitly confirming ingestion progressed rather than merely leaving a sleeping worker enabled.
 

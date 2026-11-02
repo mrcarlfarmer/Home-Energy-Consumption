@@ -7,24 +7,25 @@ from conftest import DEVICE
 
 
 def test_arithmetic_and_gaps() -> None:
-    m = integrate(((t * 1_000_000, 4_000_000) for t in range(0, 121, 10)), 0, 120_000_000)
+    m = integrate(((t * 1_000_000, 8_000_000) for t in range(0, 121, 10)), 0, 120_000_000)
     assert m.observed_us == 120_000_000
-    assert m.load[0] / 3_600_000 == pytest.approx(0.133333333333)
-    assert m.excess[0] / 3_600_000 == pytest.approx(0.010666666667)
+    assert m.above == [120_000_000]
+    assert m.load[0] / 3_600_000 == pytest.approx(0.266666666667)
+    assert m.excess[0] / 3_600_000 == pytest.approx(0.066666666667)
     assert integrate([(0, 4_000_000), (120_000_000, 4_000_000)], 0, 120_000_000).observed_us == 0
-    assert integrate([(0, 3_680_000), (10_000_000, 3_680_000)], 0, 10_000_000).above[0] == 0
+    assert integrate([(0, 6_000_000), (10_000_000, 6_000_000)], 0, 10_000_000).above[0] == 0
     assert integrate([(0, -1000), (10_000_000, -1000)], 0, 10_000_000).energy_ws == 0
     assert integrate([(0, 1000), (10_000_000, None)], 0, 10_000_000).observed_us == 0
 
 
 def test_irregular_weighting_clipping_and_no_extrapolation() -> None:
-    rows = [(0, 6_000_000), (10_000_000, 1_000_000), (30_000_000, 1_000_000)]
+    rows = [(0, 7_000_000), (10_000_000, 1_000_000), (30_000_000, 1_000_000)]
     m = integrate(rows, 0, 60_000_000)
     assert m.observed_us == 30_000_000
     assert m.above[0] / m.observed_us == pytest.approx(1 / 3)
     clipped = integrate(rows, 5_000_000, 15_000_000)
     assert clipped.observed_us == 10_000_000
-    assert clipped.energy_ws == 35_000
+    assert clipped.energy_ws == 40_000
     assert integrate([(0, 1000), (30_000_001, 1000)], 0, 60_000_000).observed_us == 0
 
 
@@ -49,7 +50,9 @@ async def test_rollups_match_raw_and_corrections(store: Store) -> None:
     after = await api.summary(start + 1_000_000, start + 1799_000_000, "Europe/London")
     assert before == after
     assert after["coverage_pct"] == 100
-    assert after["thresholds"][0]["time_above_pct"] == 100
+    assert len(after["thresholds"]) == 1
+    assert after["thresholds"][0]["threshold_w"] == 6000
+    assert after["thresholds"][0]["time_above_pct"] == 0
     history = await api.history(start, start + 1800_000_000, "1m", 1500)
     assert history["series"]["rolling_15m_w"][13] is None
     assert history["series"]["rolling_15m_w"][14] == 4000
@@ -59,6 +62,8 @@ async def test_rollups_match_raw_and_corrections(store: Store) -> None:
     await store.rebuild(100)
     assert changed == await api.summary(start, start + 1800_000_000, "UTC")
     assert changed["sampled_peak_w"] == 6001
+    assert changed["thresholds"][0]["seconds_above"] == 10
+    assert changed["thresholds"][0]["excess_energy_kwh"] == pytest.approx(10 / 3_600_000)
 
 
 async def test_no_data_nulls_and_dst(store: Store) -> None:

@@ -39,7 +39,7 @@ These are explicit design defaults, not claims about Kraken guarantees:
 | Maximum gap eligible for demand integration | 30 seconds between valid adjacent samples |
 | Stale display | Native reading age above `max(120 seconds, 3 * polling interval)` |
 | Time zone | `Europe/London` for calendar days; UTC storage |
-| Fixed inverter thresholds | 3,680 W, 5,000 W and 6,000 W |
+| Fixed inverter threshold | 6,000 W |
 | Historical output | Target 1,500 buckets; hard limit 2,000 buckets |
 | Historical request span | At most 366 days per request; older retained periods remain selectable |
 | SSE clients | At most four simultaneous streams |
@@ -55,7 +55,7 @@ Live demand, connection/collection health, interval charts, local-day sampled pe
 
 Billing-grade reconciliation, tariffs/cost forecasting, controlling batteries or inverters, battery state-of-charge simulation, multi-user roles, simultaneous multi-meter collection, arbitrary user-defined threshold sets, cloud-hosted access, Prometheus/Redis/Celery, and bulk import of years of pre-installation history.
 
-The smart meter measures grid-side demand, not necessarily gross household demand. Solar or an existing battery can obscure the underlying household load. Preserve negative demand, where supplied, but use nonnegative import demand for the inverter-sizing calculations. Explain this limitation in the dashboard. This is a sampled sizing aid, not an electrical design or connection-approval tool; brief motor-starting surges may not be captured. The 3.68 kW preset is a familiar single-phase reference, not a determination of G98/G99 eligibility.
+The smart meter measures grid-side demand, not necessarily gross household demand. Solar or an existing battery can obscure the underlying household load. Preserve negative demand, where supplied, but use nonnegative import demand for the inverter-sizing calculations. Explain this limitation in the dashboard. This is a sampled sizing aid, not an electrical design or connection-approval tool; brief motor-starting surges may not be captured. The 6 kW threshold is a comparison reference, not a determination of connection eligibility.
 
 ## 2. Architecture and data flow
 
@@ -289,7 +289,7 @@ CREATE TABLE rollup_5m (
 CREATE TABLE rollup_threshold_5m (
     device_id TEXT NOT NULL,
     bucket_start_us INTEGER NOT NULL,
-    threshold_w INTEGER NOT NULL CHECK (threshold_w IN (3680, 5000, 6000)),
+    threshold_w INTEGER NOT NULL CHECK (threshold_w = 6000),
     above_us INTEGER NOT NULL CHECK (above_us BETWEEN 0 AND 300000000),
     load_above_watt_seconds REAL NOT NULL
         CHECK (load_above_watt_seconds >= 0),
@@ -346,7 +346,7 @@ For any inserted/corrected timestamp, find its predecessor and successor. Mark e
 
 Recompute complete dirty five-minute buckets from authoritative raw readings plus the immediately adjacent boundary samples. Rebuilding must include intervals crossing a bucket even when neither endpoint lies inside that bucket.
 
-The maintenance task processes a bounded number of dirty buckets per pass, with each small bucket rebuild committed independently. Calculate and replace the base and all three threshold rows atomically, then remove that bucket's dirty marker. The serialized writer prevents a new raw-data change from being lost between computation and clearing the marker.
+The maintenance task processes a bounded number of dirty buckets per pass, with each small bucket rebuild committed independently. Calculate and replace the base and 6 kW threshold rows atomically, then remove that bucket's dirty marker. The serialized writer prevents a new raw-data change from being lost between computation and clearing the marker.
 
 Analytical reads use a consistent database snapshot. Never serve a dirty or wrong-algorithm-version rollup as current. Recompute bounded dirty spans from raw data for the response; if a large rebuild exceeds the query budget, respond with an explicit retryable `analytics_rebuilding` error and show that state in the UI.
 
@@ -400,7 +400,7 @@ E_{\mathrm{excess}}(T) =
 \frac{\sum_i \max(p_i-T,0)d_i}{3{,}600{,}000}
 $$
 
-All energy results above are kWh. Threshold comparison is strictly `>`: demand exactly at 3,680 W does not exceed 3,680 W.
+All energy results above are kWh. Threshold comparison is strictly `>`: demand exactly at 6,000 W does not exceed 6,000 W.
 
 - `time_above_pct` uses observed time, not sample count and not total requested wall-clock time.
 - `coverage_pct` is observed seconds divided by requested elapsed seconds.
@@ -412,7 +412,7 @@ All energy results above are kWh. Threshold comparison is strictly `>`: demand e
 - Cumulative consumption counters are never summed. Store them for display and optional independent sanity checking; counter reset/wrap or missing endpoints must not produce negative energy.
 - A future counter-delta comparison must remain a separately labelled measurement, not silently replace demand-integrated threshold calculations.
 
-**Reference arithmetic fixture:** 120 fully observed seconds at 4,000 W, threshold 3,680 W, produces 100% above-threshold time, 0.133333333 kWh energy while above, and 0.010666667 kWh excess energy. This fixture consists of valid samples at the source cadence, not one unsupported 120-second gap.
+**Reference arithmetic fixture:** 120 fully observed seconds at 8,000 W, threshold 6,000 W, produces 100% above-threshold time, 0.266666667 kWh energy while above, and 0.066666667 kWh excess energy. This fixture consists of valid samples at the source cadence, not one unsupported 120-second gap.
 
 ### Daily peaks and trailing demand
 
@@ -427,7 +427,7 @@ All energy results above are kWh. Threshold comparison is strictly `>`: demand e
 
 ### Rollup and downsampling strategy
 
-The five-minute cache stores observed duration, the integral of import demand, sampled peaks and the three threshold integrals/durations. Threshold metrics must be computed **before** chart downsampling; an average below a rating can hide substantial time above it.
+The five-minute cache stores observed duration, the integral of import demand, sampled peaks and the 6 kW threshold integrals/duration. Threshold metrics must be computed **before** chart downsampling; an average below the rating can hide substantial time above it.
 
 1. Short/high-resolution ranges use indexed raw readings and bounded interval aggregation.
 2. Longer ranges sum complete five-minute rollups. Recalculate only partially included edge buckets, dirty buckets and the necessary rolling-window context from raw readings.
@@ -489,7 +489,7 @@ Example `GET /api/config`:
   "polling_enabled": true,
   "poll_interval_seconds": 45,
   "display_timezone": "Europe/London",
-  "thresholds_w": [3680, 5000, 6000],
+  "thresholds_w": [6000],
   "devices": [
     {
       "device_id": "AA-BB-CC-DD-EE-FF-00-11",
@@ -577,15 +577,15 @@ Response shape:
   "observed_seconds": 85000,
   "coverage_pct": 98.37963,
   "import_energy_kwh": 12.8,
-  "sampled_peak_w": 6200,
+  "sampled_peak_w": 8000,
   "sampled_peak_at": "2026-10-03T07:15:10Z",
   "thresholds": [
     {
-      "threshold_w": 3680,
-      "seconds_above": 5100,
-      "time_above_pct": 6.0,
-      "energy_when_above_kwh": 6.0,
-      "excess_energy_kwh": 0.786666667
+      "threshold_w": 6000,
+      "seconds_above": 3600,
+      "time_above_pct": 4.235294,
+      "energy_when_above_kwh": 7.5,
+      "excess_energy_kwh": 1.5
     }
   ],
   "daily_peaks": [],

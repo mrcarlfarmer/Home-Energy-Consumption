@@ -182,8 +182,10 @@ async def test_session_migration_preserves_existing_database(tmp_path: Path) -> 
         assert (await store.config())["octopus_api_key"] == "migration-fixture-key"
         assert await store.password_hash() == encoded
         assert await store.load_sessions() == []
+        assert not (await store.public_config())["has_home_assistant_token"]
+        assert not (await store.config())["home_assistant_enabled"]
         async with store.read() as conn:
-            assert (await one(conn, "PRAGMA user_version"))[0] == 3
+            assert (await one(conn, "PRAGMA user_version"))[0] == 5
             assert (await one(conn, "PRAGMA integrity_check"))[0] == "ok"
     finally:
         await store.close()
