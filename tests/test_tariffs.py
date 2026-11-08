@@ -366,6 +366,133 @@ async def test_both_costs_split_rate_boundaries_without_extrapolation(store: Sto
     assert partial["price_coverage_pct"] == pytest.approx(100 / 3)
 
 
+async def test_daily_costs_split_local_midnight_and_clip_the_partial_day(store: Store) -> None:
+    start = timestamp_us("2026-10-24T22:59:30Z")
+    midnight = start + 30_000_000
+    end = start + 50_000_000
+    config = await seed(store, start=start)
+    await store.save_tariff_rates(
+        config,
+        start,
+        start + 60_000_000,
+        [
+            TariffRate(start, midnight, Decimal(10), CODE, "STANDARD"),
+            TariffRate(midnight, start + 60_000_000, Decimal(30), CODE, "STANDARD"),
+        ],
+        cache_details(start, start + 60_000_000),
+    )
+    result = await Analytics(store).daily_peaks(end, "Europe/London")
+    previous, latest = result["daily_peaks"][-2:]
+    assert previous["date"] == "2026-10-24"
+    assert latest["date"] == "2026-10-25"
+    assert previous["observed_seconds"] == 30
+    assert latest["requested_seconds"] == latest["observed_seconds"] == 20
+    assert latest["to"] == iso(end)
+    assert previous["pricing"]["energy_when_above_gbp"] == pytest.approx(0.006666666667)
+    assert previous["pricing"]["excess_energy_gbp"] == pytest.approx(0.001666666667)
+    assert latest["pricing"]["energy_when_above_gbp"] == pytest.approx(0.013333333333)
+    assert latest["pricing"]["excess_energy_gbp"] == pytest.approx(0.003333333333)
+    assert previous["pricing"]["price_coverage_pct"] == 100
+    assert latest["pricing"]["price_coverage_pct"] == 100
+    summary = await Analytics(store).summary(start, end, "Europe/London")
+    for field in ("energy_when_above_gbp", "excess_energy_gbp"):
+        assert previous["pricing"][field] + latest["pricing"][field] == pytest.approx(
+            summary["pricing"][field]
+        )
+
+
+@pytest.mark.parametrize(
+    "end,hours,first,second",
+    [
+        (
+            "2026-10-26T00:00:00Z",
+            25,
+            "2026-10-25T00:30:00Z",
+            "2026-10-25T01:30:00Z",
+        ),
+        (
+            "2026-03-29T23:00:00Z",
+            23,
+            "2026-03-29T00:30:00Z",
+            "2026-03-29T01:30:00Z",
+        ),
+    ],
+)
+async def test_daily_costs_preserve_dst_duration_and_dated_rates(
+    store: Store, end: str, hours: int, first: str, second: str
+) -> None:
+    start, change = timestamp_us(first), timestamp_us(second)
+    await seed(store, start=start)
+    config = await seed(store, start=change)
+    await store.save_tariff_rates(
+        config,
+        start,
+        change + 60_000_000,
+        [
+            TariffRate(start, start + 60_000_000, Decimal(10), CODE, "STANDARD"),
+            TariffRate(change, change + 60_000_000, Decimal(30), CODE, "STANDARD"),
+        ],
+        cache_details(start, change + 60_000_000),
+    )
+    latest = (await Analytics(store).daily_peaks(timestamp_us(end), "Europe/London"))[
+        "daily_peaks"
+    ][-1]
+    assert latest["requested_seconds"] == hours * 3600
+    assert latest["observed_seconds"] == 120
+    assert latest["pricing"]["priced_seconds_above"] == 120
+    assert latest["pricing"]["price_coverage_pct"] == 100
+    assert latest["pricing"]["energy_when_above_gbp"] == pytest.approx(0.053333333333)
+    assert latest["pricing"]["excess_energy_gbp"] == pytest.approx(0.013333333333)
+
+
+async def test_daily_costs_keep_missing_prices_separate_from_zero_and_other_days(
+    store: Store,
+) -> None:
+    await seed(store, start=START - 3 * DAY_US)
+    await seed(store, start=START - 2 * DAY_US)
+    await seed(store, start=START - DAY_US, demand=6000)
+    config = await seed(store)
+    await store.save_tariff_rates(
+        config,
+        START - 4 * DAY_US,
+        START + 60_000_000,
+        [
+            TariffRate(
+                START - 2 * DAY_US,
+                START - 2 * DAY_US + 30_000_000,
+                Decimal(30),
+                CODE,
+                "STANDARD",
+            ),
+            TariffRate(START, START + 60_000_000, Decimal(30), CODE, "STANDARD"),
+        ],
+        cache_details(START - 4 * DAY_US, START + 60_000_000),
+    )
+    days = (await Analytics(store).daily_peaks(START + 60_000_000, "UTC"))["daily_peaks"]
+    assert [day["date"] for day in days] == [
+        "2026-10-21",
+        "2026-10-22",
+        "2026-10-23",
+        "2026-10-24",
+        "2026-10-25",
+    ]
+    for day in days[:3]:
+        assert day["pricing"]["available"] is False
+        assert day["pricing"]["energy_when_above_gbp"] is None
+        assert day["pricing"]["excess_energy_gbp"] is None
+    assert days[0]["pricing"]["price_coverage_pct"] is None
+    assert "No observed energy" in days[0]["pricing"]["warning"]
+    assert days[1]["pricing"]["price_coverage_pct"] == 0
+    assert days[2]["pricing"]["price_coverage_pct"] == 50
+    assert days[3]["pricing"]["available"] is True
+    assert days[3]["pricing"]["energy_when_above_gbp"] == 0
+    assert days[3]["pricing"]["excess_energy_gbp"] == 0
+    assert days[3]["pricing"]["price_coverage_pct"] == 100
+    assert days[4]["pricing"]["available"] is True
+    assert days[4]["pricing"]["energy_when_above_gbp"] == pytest.approx(0.04)
+    assert days[4]["pricing"]["excess_energy_gbp"] == pytest.approx(0.01)
+
+
 async def test_archived_costs_require_rates_at_the_retained_resolution(store: Store) -> None:
     config = await seed(store, seconds=300)
     await store.rebuild()
@@ -385,6 +512,8 @@ async def test_archived_costs_require_rates_at_the_retained_resolution(store: St
     )
     result = (await Analytics(store).summary(START, START + 300_000_000, "UTC"))["pricing"]
     assert not result["available"] and result["energy_when_above_gbp"] is None
+    daily = (await Analytics(store).daily_peaks(START + 300_000_000, "UTC"))["daily_peaks"]
+    assert daily[-1]["pricing"] == result
     await store.save_tariff_rates(
         config,
         START,
@@ -396,6 +525,8 @@ async def test_archived_costs_require_rates_at_the_retained_resolution(store: St
     assert result["available"]
     assert result["energy_when_above_gbp"] == pytest.approx(0.2)
     assert result["excess_energy_gbp"] == pytest.approx(0.05)
+    daily = (await Analytics(store).daily_peaks(START + 300_000_000, "UTC"))["daily_peaks"]
+    assert daily[-1]["pricing"] == result
 
 
 @pytest.mark.parametrize("demand,price,expected", [(6000, 30, 0), (8000, -30, -0.04)])
@@ -413,6 +544,8 @@ async def test_exact_threshold_zero_and_negative_prices(
     result = (await Analytics(store).summary(START, START + 60_000_000, "UTC"))["pricing"]
     assert result["energy_when_above_gbp"] == pytest.approx(expected)
     assert result["excess_energy_gbp"] == pytest.approx(expected / 4)
+    daily = (await Analytics(store).daily_peaks(START + 60_000_000, "UTC"))["daily_peaks"]
+    assert daily[-1]["pricing"] == result
 
 
 async def test_ev_adjusted_costs_use_joint_coverage_and_ignore_standing_charge(
@@ -451,6 +584,45 @@ async def test_ev_adjusted_costs_use_joint_coverage_and_ignore_standing_charge(
     assert result["pricing"]["energy_when_above_gbp"] == pytest.approx(0.0133333333)
     assert result["pricing"]["excess_energy_gbp"] == pytest.approx(0.0033333333)
     assert result["pricing"]["priced_seconds_above"] == 20
+    daily = await Analytics(store).daily_peaks(START + 60_000_000, "UTC", exclude_ev=True)
+    assert daily["daily_peaks"][-1]["pricing"] == result["pricing"]
+
+
+async def test_daily_ev_costs_only_price_joint_history_within_raw_retention(store: Store) -> None:
+    config = await seed(store)
+    await store.save_config(
+        ConfigUpdate(
+            expected_revision=config["revision"],
+            home_assistant_url="http://ha",
+            home_assistant_entity="sensor.power",
+            home_assistant_token=SecretStr("fixture-token"),
+            home_assistant_enabled=True,
+        )
+    )
+    config = await store.config()
+    end = START + 60_000_000
+    await store.save_ev_history(config, START, end, [EVInterval(START, end, 0)])
+    await store.save_tariff_rates(
+        config,
+        START,
+        end,
+        [TariffRate(START, end, Decimal(30), CODE, "STANDARD")],
+        cache_details(START, end),
+    )
+    async with store.write() as conn:
+        await conn.execute(
+            "INSERT INTO retention_state(device_id,raw_before_us) VALUES(?,?)",
+            (DEVICE, START + 30_000_000),
+        )
+    days = (await Analytics(store).daily_peaks(end, "UTC", exclude_ev=True))["daily_peaks"]
+    assert all(day["pricing"]["energy_when_above_gbp"] is None for day in days[:-1])
+    assert all(day["pricing"]["excess_energy_gbp"] is None for day in days[:-1])
+    assert days[-1]["observed_seconds"] == 30
+    assert days[-1]["coverage_pct"] == 50
+    assert days[-1]["pricing"]["priced_seconds_above"] == 30
+    assert days[-1]["pricing"]["price_coverage_pct"] == 100
+    assert days[-1]["pricing"]["energy_when_above_gbp"] == pytest.approx(0.02)
+    assert days[-1]["pricing"]["excess_energy_gbp"] == pytest.approx(0.005)
 
 
 async def test_cache_is_revision_fenced_and_discarded_on_meter_change(store: Store) -> None:

@@ -127,6 +127,16 @@ graph duration, uses the selected meter and analysis basis, and includes
 unavailable days without inventing peaks. UK DST days retain 23/25-hour coverage
 denominators. Expired EV history remains unknown.
 
+The daily table displays only the estimated cost of excess energy beyond 6 kW,
+using the same tariff calculation as the selected-window summary but clipped
+to that calendar day's actual bounds. These estimates are independent of the
+graph duration and honor the selected meter and EV basis.
+No observed duration or incomplete applicable price coverage yields unavailable
+costs, not zero; supported days without exceedance cost zero when pricing is
+enabled and fetched. The daily telemetry coverage remains separate from price
+coverage, which is included in each cost cell's explanation. Missing-rate and
+pricing-disabled explanations appear below the table heading.
+
 The browser plots observed mean and sampled peak only. The history API retains
 trailing 15-minute demand for compatibility: the import integral over the
 previous 900 seconds divided by 900, evaluated at each chart bucket's end.

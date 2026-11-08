@@ -61,7 +61,12 @@ or older tariff periods are not guessed. Fetch rates in Settings first.
 at the viewed window, newest first, independently of the graph's duration.
 The latest day may be partial. It uses the configured calendar timezone (or
 archive timezone for archived history), the selected meter and the EV toggle.
-Unavailable days remain unavailable rather than showing zero.
+It also shows each day's estimated cost of only the excess energy above 6 kW,
+using dated household tariff rates. Costs cover observed energy only, not gaps;
+the latest partial day is not extrapolated. Unavailable days or incomplete
+price coverage remain
+unavailable rather than showing zero. Enable and fetch tariff pricing in
+Settings to see costs.
 
 ## Recovering gaps in the graph
 
@@ -74,7 +79,13 @@ pending recovery work and excluding the newest three minutes.
 The collector skips fully supported fifteen-minute windows and retries missing
 ones through the existing Octopus rate governor, alternating with live requests.
 Watch the recovery status and Collection health; a long range can take many
-polling intervals. Recovered readings update the graph, coverage, energy and
+polling intervals. An animated indicator shows queued/checking/waiting recovery,
+along with the cursor, target and last progress time. Paused recovery explains
+whether polling, storage or connection settings need attention. Completion is
+shown separately from **finished with gaps**, including after a page reload.
+Disconnected live updates show that progress is unknown, not that recovery
+finished. The animation respects reduced-motion preferences.
+Recovered readings update the graph, coverage, energy and
 cost estimates. Missing/unavailable upstream data remains a visible gap, never
 an interpolated line or fabricated zero. This recovers Octopus meter data, not
 missing Home Assistant history, and cannot restore expired raw archives.

@@ -119,6 +119,13 @@ Each snapshot contains:
 - `device_id`, `data_version`.
 - Nullable `reading`: native `read_at`, signed `demand_w`, nonnegative `import_demand_w`, cumulative `consumption_kwh`, quality.
 - `health`: collector state, native telemetry freshness, storage state, latest successful API contact, latest reading time, next retry, consecutive failures and sanitized error code.
+- Recovery health additionally exposes `recovery_state` (`idle`, `pending`,
+  `paused` or `complete`), `recovery_active` (a historical worker request is
+  currently in flight), cursor/target, `recovery_last_progress_at` (the latest
+  completed or locally skipped chunk), unresolved-window count and recovery
+  error. Completion/progress persist across restarts; active work is process-local.
+  A complete pass can still have unresolved windows. Storage recovery health
+  contains the persistent fields; live snapshots also include `recovery_active`.
 - `home_assistant`: independent EV collector state, `power_w`, `reported_at`,
   latest success/retry, sanitized `error_code` and optional backfill cursor.
 
@@ -161,7 +168,8 @@ This example represents two fully observed minutes at 8 kW. Null estimates mean 
 `GET /api/analytics/daily-peaks` accepts `to`, `timezone`, optional `device_id`
 and `exclude_ev`, using the same authentication and analytical query lane.
 It returns `device_id`, actual `from`/`to`, `timezone`, five `daily_peaks` rows
-with the existing daily-metrics shape, and `warnings`. These are the five calendar
+with the existing daily-metrics shape plus a per-row `pricing` estimate, and
+`warnings`. These are the five calendar
 dates ending at the exclusive `to`; a midnight end includes the preceding day,
 not an empty next day. The latest date can be partial. Archived grid resolution
 may expand it to a whole day. Missing/expired EV history yields unavailable days
@@ -177,6 +185,14 @@ No observed duration also yields null. Observed periods without exceedance can
 legitimately cost zero. Price coverage is above-threshold duration coverage, not
 overall meter/EV coverage. Standing charges, EV-specific billing adjustments and
 account-specific discounts are excluded; exceeding 6 kW is not itself a penalty.
+
+Each `/api/analytics/daily-peaks` row's `pricing` has the same fields and
+availability rules as the summary estimate, calculated independently over that
+row's actual calendar-day bounds. It prices both all energy while demand exceeds
+6 kW and only the excess beyond 6 kW, not a daily 6 kWh allowance. A missing rate
+on one day does not suppress another day's fully priced estimate. Disabled
+pricing, inactive meters, missing observations and insufficient retained detail
+retain explicit per-row explanations.
 
 `GET /api/analytics/history` additionally accepts `interval=auto|1m|5m|15m|30m|1h|6h|1d` and `max_points` (default 1,500, maximum 4,000). An explicit interval that cannot fit the output bound returns 422, rather than silently changing it.
 

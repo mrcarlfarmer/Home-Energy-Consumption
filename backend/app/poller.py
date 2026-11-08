@@ -31,6 +31,7 @@ class Poller:
             "consecutive_failures": 0,
             "error_code": None,
             "recovery_incomplete": False,
+            "recovery_active": False,
             "disk_free_bytes": None,
             "database_bytes": None,
             "low_disk": False,
@@ -48,6 +49,12 @@ class Poller:
         config = await self.store.config()
         self.health.update(await self.store.capacity())
         self.health.update(await self.store.recovery_health(config["active_device_id"]))
+        self.health["recovery_active"] = bool(
+            self.health["recovery_pending"]
+            and self.recovery_due
+            and self.inflight is not None
+            and not self.inflight.done()
+        )
         latest = await self.store.latest(config["active_device_id"])
         data_version = 0
         if config["active_device_id"]:
@@ -174,6 +181,7 @@ class Poller:
             return
         try:
             self.health["last_attempt_at"] = iso(now_us())
+            await self.publish()
             rows = await self.client.telemetry(
                 config["octopus_api_key"],
                 device,

@@ -65,9 +65,12 @@ class Health(BaseModel):
     storage_paused: bool
     maintenance_error: str | None
     last_maintenance_at: str | None
+    recovery_state: Literal["idle", "pending", "complete", "paused"]
+    recovery_active: bool
     recovery_pending: bool
     recovery_cursor_at: str | None
     recovery_target_at: str | None
+    recovery_last_progress_at: str | None
     recovery_gap_count: int
     recovery_error: str | None
 
@@ -153,6 +156,10 @@ class PricingEstimate(BaseModel):
     warning: str
 
 
+class DailyPeakMetrics(DailyMetrics):
+    pricing: PricingEstimate
+
+
 class TariffPrice(TimeRange):
     pence_per_kwh: float
     band: str
@@ -191,7 +198,7 @@ class Summary(Metrics, TimeRange):
 class DailyPeaks(TimeRange):
     device_id: str
     timezone: str
-    daily_peaks: list[DailyMetrics]
+    daily_peaks: list[DailyPeakMetrics]
     warnings: list[str]
 
 

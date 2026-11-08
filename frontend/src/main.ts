@@ -17,6 +17,9 @@ let generation = 0;
 let recoveryRange: { from: string; to: string; device_id: string } | undefined;
 let recoveryBusy = false;
 let recoveryPending = false;
+let recoveryHealth: Snapshot["health"] | undefined;
+let recoveryConnected = false;
+let recoveryRequestError = "";
 let viewRange = { from: new Date(), to: new Date() };
 let followLatest = true;
 let autoRefresh = true;
@@ -33,16 +36,75 @@ function fillRecovery(): void {
       : "Retries missing Octopus readings in this range, excluding the newest three minutes. Live collection continues. Older data may be unavailable; missing Ohme history is not recovered here.");
 }
 
+type RecoveryDisplayState = "idle" | "requesting" | "queued" | "running" | "waiting" | "paused" | "complete" | "incomplete" | "error" | "disconnected";
+function showRecovery(state: RecoveryDisplayState, message: string, active = ["requesting", "queued", "running", "waiting"].includes(state)): void {
+  const labels: Record<RecoveryDisplayState, string> = {
+    idle: "", requesting: "Requesting recovery", queued: "Recovery queued",
+    running: "Checking missing readings", waiting: "Waiting to continue recovery",
+    paused: "Recovery paused", complete: "Recovery complete",
+    incomplete: "Recovery finished with gaps", error: "Recovery request failed",
+    disconnected: "Recovery status unavailable",
+  };
+  const busy = ["requesting", "queued", "running", "waiting"].includes(state);
+  const feedback = element("recovery-feedback");
+  feedback.hidden = state === "idle";
+  feedback.dataset.state = state;
+  element("recovery-spinner").hidden = !active;
+  element("recover-history").setAttribute("aria-busy", String(busy));
+  text("recovery-state", labels[state]);
+  text("recovery-status", message);
+}
+function updateRecovery(health: Snapshot["health"]): void {
+  const details = [
+    health.recovery_cursor_at ? `Recovery cursor: ${new Date(health.recovery_cursor_at).toLocaleString()}.` : "",
+    health.recovery_target_at ? `Target: ${new Date(health.recovery_target_at).toLocaleString()}.` : "",
+    health.recovery_last_progress_at ? `Last recovery progress: ${new Date(health.recovery_last_progress_at).toLocaleString()}.` : "",
+    recoveryRequestError ? `Recovery request error: ${recoveryRequestError}` : "",
+  ];
+  if (health.recovery_pending && health.recovery_cursor_at && health.recovery_target_at) {
+    const remaining = Math.max(0, (new Date(health.recovery_target_at).getTime() - new Date(health.recovery_cursor_at).getTime()) / 1000);
+    details.push(`${number(Math.ceil(remaining / 900), 0)} fifteen-minute windows remain to check. Live and historical requests alternate at the configured polling interval.`);
+  }
+  const show = (state: RecoveryDisplayState, message: string, active?: boolean) => showRecovery(state, [message, ...details].filter(Boolean).join(" "), active);
+  if (health.recovery_error || health.recovery_state === "paused") {
+    show("paused", `${health.recovery_error?.replaceAll("_", " ") ?? "Historical recovery is paused"}. Correct settings or request another recovery pass.`);
+  } else if (health.recovery_pending) {
+    if (health.storage_paused || health.storage_state !== "ok" || health.polling_state === "storage_paused") {
+      show("paused", "Recovery cannot continue while storage is paused or unavailable. Check Collection health and restore storage capacity.");
+    } else if (health.polling_state === "stopped") {
+      show("paused", config.polling_enabled
+        ? "Polling is enabled, but the collector is stopped. Recovery cannot advance. Check Collection health; restart the service if the collector stays stopped."
+        : "Recovery is waiting for meter polling to be enabled. Start polling to continue; queued history is retained.");
+    } else if (["auth_error", "configuration_error"].includes(health.polling_state)) {
+      show("paused", `Recovery cannot continue: ${(health.error_code ?? health.polling_state).replaceAll("_", " ")}. Correct the saved connection settings.`);
+    } else if (health.polling_state === "backoff") {
+      show("waiting", [
+        `Recovery will retry after an upstream error: ${(health.error_code ?? "temporary upstream error").replaceAll("_", " ")}.`,
+        health.next_attempt_at ? `Next collection attempt: ${new Date(health.next_attempt_at).toLocaleTimeString()}.` : "",
+      ].filter(Boolean).join(" "), false);
+    } else if (health.recovery_active) {
+      show("running", "Active-meter recovery is checking the next historical window with Octopus.");
+    } else {
+      show(health.recovery_last_progress_at ? "waiting" : "queued",
+        "Active-meter recovery is queued between collection requests. It has not finished.");
+    }
+  } else if (health.recovery_state === "complete") {
+    show(health.recovery_gap_count ? "incomplete" : "complete", health.recovery_gap_count
+      ? `The recovery pass finished, but ${number(health.recovery_gap_count, 0)} historical windows still contain missing or unavailable samples. No gaps are filled with invented data. Check Collection health; you can retry missing readings later.`
+      : "The recovery pass finished with no recorded unresolved windows.");
+  } else if (recoveryRequestError) {
+    showRecovery("error", recoveryRequestError);
+  } else {
+    showRecovery("idle", "");
+  }
+}
+
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
   if (!found) throw new Error(`Missing UI element: ${id}`);
   return found as T;
 }
 function text(id: string, value: string): void { element(id).textContent = value; }
-function showRecoveryStatus(message: string, active = false): void {
-  text("recovery-status", message);
-  element("recovery-status").classList.toggle("recovering", active);
-}
 function number(value: number | null, digits = 2): string {
   return value === null ? "Unavailable" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
@@ -97,6 +159,7 @@ function clearMessage(): void { text("message", ""); }
 function cleanup(): void {
   generation++;
   recoveryRange = undefined; recoveryBusy = false; recoveryPending = false;
+  recoveryHealth = undefined; recoveryConnected = false; recoveryRequestError = "";
   window.onhashchange = null;
   stream?.close(); stream = undefined;
   chart?.destroy(); chart = undefined;
@@ -140,6 +203,7 @@ function fillPolling(): void {
   element<HTMLInputElement>("enabled").checked = config.polling_enabled;
   element<HTMLInputElement>("interval").value = String(config.poll_interval_seconds);
   fillRecovery();
+  if (recoveryHealth && recoveryConnected && !recoveryBusy) updateRecovery(recoveryHealth);
 }
 async function savePolling(update: { polling_enabled?: boolean; poll_interval_seconds?: number }): Promise<void> {
   clearMessage();
@@ -317,7 +381,7 @@ async function refresh(automatic = false): Promise<void> {
     ]) row.insertCell().textContent = cell;
     const days = element<HTMLTableSectionElement>("days"); days.replaceChildren();
     text("days-status", peaks
-      ? `Five calendar days ending at the viewed window, newest first. Calendar timezone: ${peaks.timezone}. The final day may be partial. ${peaks.warnings.join(". ")}`
+      ? `Five calendar days ending at the viewed window, newest first. Calendar timezone: ${peaks.timezone}. The final day may be partial. Costs cover observed energy only; excess cost prices only the portion above 6 kW. ${[...new Set([...peaks.warnings, ...peaks.daily_peaks.map(day => day.pricing.warning)])].join(" ")}`
       : `Daily peaks unavailable: ${peakError}`);
     for (const day of [...peaks?.daily_peaks ?? []].reverse()) {
       const row = days.insertRow();
@@ -325,6 +389,12 @@ async function refresh(automatic = false): Promise<void> {
         day.date, day.sampled_peak_w === null ? "Unavailable" : `${number(day.sampled_peak_w / 1000)} kW`,
         `${number(day.coverage_pct)}%`,
       ]) row.insertCell().textContent = value;
+      const cell = row.insertCell();
+      cell.textContent = day.pricing.enabled ? money(day.pricing.excess_energy_gbp) : "Pricing disabled";
+      cell.title = [
+        day.pricing.warning,
+        day.pricing.price_coverage_pct !== null ? `Applicable prices cover ${number(day.pricing.price_coverage_pct)}% of observed time above 6 kW.` : "",
+      ].filter(Boolean).join(" ");
     }
     text("off-peak-status", tariffNote);
     chart?.update(history, rates);
@@ -341,10 +411,15 @@ async function refresh(automatic = false): Promise<void> {
 function connect(): void {
   stream?.close();
   stream = new EventSource("/api/telemetry/live");
-  stream.onopen = () => text("stream-health", "Dashboard connected");
+  stream.onopen = () => {
+    recoveryConnected = true;
+    text("stream-health", "Dashboard connected");
+  };
   stream.onerror = async () => {
+    recoveryConnected = false;
     text("stream-health", "Reconnecting to dashboard...");
-    if (recoveryPending) showRecoveryStatus("Recovery status unavailable while reconnecting to the dashboard.");
+    if (recoveryPending || recoveryBusy) showRecovery("disconnected",
+      "Live status updates are disconnected, so recovery progress is unknown. The server may still be working; this does not mean recovery has finished. Reconnecting...");
     try { await session(); } catch (error) { showError(error); }
   };
   stream.addEventListener("snapshot", (event: MessageEvent<string>) => {
@@ -356,19 +431,12 @@ function connect(): void {
       const measured = snapshot.reading ? new Date(snapshot.reading.read_at).toLocaleString() : "No reading yet";
       text("read-at", `Last measurement: ${measured}`);
       const h = snapshot.health;
-      const recoveryFinished = recoveryPending && !h.recovery_pending && !h.recovery_error;
+      recoveryConnected = true;
+      const recoveryFinished = recoveryPending && h.recovery_state === "complete"
+        && snapshot.device_id === config.active_device_id;
       recoveryPending = h.recovery_pending;
-      const recoveryActive = h.recovery_pending && !h.recovery_error && h.polling_state === "running"
-        && h.storage_state === "ok" && !h.storage_paused;
-      if (h.recovery_error) showRecoveryStatus(`Recovery paused: ${h.recovery_error.replaceAll("_", " ")}. Correct settings or request another recovery pass.`);
-      else if (h.recovery_pending) showRecoveryStatus([
-        recoveryActive ? "Active-meter recovery in progress." : "Active-meter recovery waiting for collection to resume.",
-        h.recovery_cursor_at ? `Checking from ${new Date(h.recovery_cursor_at).toLocaleString()}.` : "",
-        h.recovery_target_at ? `Target: ${new Date(h.recovery_target_at).toLocaleString()}.` : "",
-        recoveryActive ? "Live and historical requests alternate at the configured polling interval."
-          : "Recovery will continue when meter collection resumes.",
-      ].filter(Boolean).join(" "), recoveryActive);
-      else if (recoveryFinished) showRecoveryStatus("Recovery pass finished. Any remaining gaps are still missing from the available readings; check Collection health for unavailable windows.");
+      recoveryHealth = h;
+      if (!recoveryBusy) updateRecovery(h);
       const ev = snapshot.home_assistant;
       text("home-assistant-health", ev
         ? [
@@ -470,9 +538,11 @@ async function renderDashboard(): Promise<void> {
     <form id="range" class="range"><label>From (browser local time)<input id="from" type="datetime-local" step="1" required></label>
     <label>To (browser local time)<input id="to" type="datetime-local" step="1" required></label><button>Apply custom range</button></form>
     <p id="analysis-status" role="status"></p>
-    <button id="recover-history" class="secondary" type="button" disabled>Recover missing readings</button>
+    <button id="recover-history" class="secondary" type="button" aria-describedby="recovery-help recovery-status" disabled>Recover missing readings</button>
     <p id="recovery-help" class="note"></p>
-    <p id="recovery-status" role="status"></p>
+    <div id="recovery-feedback" class="recovery-feedback" role="status" aria-live="polite" aria-atomic="true" hidden>
+    <div class="recovery-heading"><span id="recovery-spinner" class="recovery-spinner" aria-hidden="true" hidden></span><strong id="recovery-state"></strong></div>
+    <p id="recovery-status" class="note"></p></div>
     <div id="chart" aria-label="Demand history chart"></div>
     <div class="chart-indicators" aria-label="Visible chart indicators"><span id="off-peak-key" class="off-peak-key" hidden>Household off-peak slot</span><span id="threshold-key" class="threshold-key" hidden>6 kW threshold</span></div>
     <p id="off-peak-status" class="note"></p>
@@ -481,7 +551,7 @@ async function renderDashboard(): Promise<void> {
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th><th scope="col">Estimated cost while above</th><th scope="col">Estimated excess cost</th></tr></thead><tbody id="thresholds"></tbody></table></div>
     <p id="pricing-note" class="note"></p>
     <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 6 kW comparison is not a G98/G99 compliance assessment.</p>
-    <div id="daily-peaks" aria-labelledby="days-label"><h3 id="days-label">Daily sampled peaks</h3><p id="days-status" class="note"></p><div class="table-scroll"><table><thead><tr><th scope="col">Local date</th><th scope="col">Peak demand</th><th scope="col">Coverage</th></tr></thead><tbody id="days"></tbody></table></div></div></section>
+    <div id="daily-peaks" aria-labelledby="days-label"><h3 id="days-label">Daily sampled peaks</h3><p id="days-status" class="note"></p><div class="table-scroll"><table aria-describedby="days-status"><thead><tr><th scope="col">Local date</th><th scope="col">Peak demand</th><th scope="col">Coverage</th><th scope="col">Estimated excess cost above 6 kW</th></tr></thead><tbody id="days"></tbody></table></div></div></section>
     </main><main id="settings-page" hidden><section id="settings-section"><div class="page-heading"><div><p class="eyebrow">CONNECTION &amp; COLLECTION</p><h1>Settings</h1></div></div><form id="settings"><div class="settings-grid">
     <label>Octopus account number<input id="account" autocomplete="off" maxlength="64" placeholder="A-..."></label>
     <label>Electricity meter<select id="device"></select><small>Test account connectivity to discover meters.</small></label>
@@ -544,17 +614,28 @@ async function renderDashboard(): Promise<void> {
   element<HTMLButtonElement>("recover-history").onclick = async () => {
     if (!recoveryRange) return;
     const current = generation;
-    recoveryBusy = true; fillRecovery(); clearMessage();
-    showRecoveryStatus("Requesting historical recovery for the selected range...", true);
+    recoveryBusy = true; recoveryRequestError = ""; fillRecovery(); clearMessage();
+    showRecovery("requesting", "Requesting historical recovery for the selected range...");
     try {
       const queued = await api<RecoveryStatus>("/api/recovery", {
         ...recoveryRange, expected_revision: config.revision,
       });
       if (current !== generation) return;
-      showRecoveryStatus(`Recovery queued: ${new Date(queued.from).toLocaleString()} to ${new Date(queued.to).toLocaleString()}. Existing pending work is retained; missing readings will be retried in fifteen-minute chunks.`);
+      recoveryPending = true;
+      if (recoveryHealth) recoveryHealth = {
+        ...recoveryHealth, recovery_state: queued.state, recovery_pending: true,
+        recovery_active: false, recovery_cursor_at: queued.from,
+        recovery_target_at: queued.to, recovery_error: null,
+      };
+      showRecovery(recoveryConnected ? "queued" : "disconnected",
+        `Recovery queued: ${new Date(queued.from).toLocaleString()} to ${new Date(queued.to).toLocaleString()}. Existing pending work is retained; missing readings will be retried in fifteen-minute chunks.${recoveryConnected ? "" : " Live status updates are disconnected; progress is unknown until reconnection."}`);
     } catch (error) {
       if (current === generation) {
-        showRecoveryStatus(error instanceof Error ? error.message : "Historical recovery could not be requested.");
+        recoveryRequestError = error instanceof Error ? error.message : "Historical recovery could not be requested.";
+        if (recoveryHealth && recoveryConnected) updateRecovery(recoveryHealth);
+        else if (recoveryPending) showRecovery("disconnected",
+          `Recovery request error: ${recoveryRequestError} Existing queued recovery may still be running, but progress is unknown until live status updates reconnect.`);
+        else showRecovery("error", recoveryRequestError);
         showError(error);
       }
     } finally {
