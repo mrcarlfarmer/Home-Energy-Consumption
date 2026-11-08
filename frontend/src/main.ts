@@ -37,7 +37,7 @@ function fillRecovery(): void {
 }
 
 type RecoveryDisplayState = "idle" | "requesting" | "queued" | "running" | "waiting" | "paused" | "complete" | "incomplete" | "error" | "disconnected";
-function showRecovery(state: RecoveryDisplayState, message: string): void {
+function showRecovery(state: RecoveryDisplayState, message: string, active = ["requesting", "queued", "running", "waiting"].includes(state)): void {
   const labels: Record<RecoveryDisplayState, string> = {
     idle: "", requesting: "Requesting recovery", queued: "Recovery queued",
     running: "Checking missing readings", waiting: "Waiting to continue recovery",
@@ -49,7 +49,7 @@ function showRecovery(state: RecoveryDisplayState, message: string): void {
   const feedback = element("recovery-feedback");
   feedback.hidden = state === "idle";
   feedback.dataset.state = state;
-  element("recovery-spinner").hidden = !busy;
+  element("recovery-spinner").hidden = !active;
   element("recover-history").setAttribute("aria-busy", String(busy));
   text("recovery-state", labels[state]);
   text("recovery-status", message);
@@ -65,11 +65,11 @@ function updateRecovery(health: Snapshot["health"]): void {
     const remaining = Math.max(0, (new Date(health.recovery_target_at).getTime() - new Date(health.recovery_cursor_at).getTime()) / 1000);
     details.push(`${number(Math.ceil(remaining / 900), 0)} fifteen-minute windows remain to check. Live and historical requests alternate at the configured polling interval.`);
   }
-  const show = (state: RecoveryDisplayState, message: string) => showRecovery(state, [message, ...details].filter(Boolean).join(" "));
+  const show = (state: RecoveryDisplayState, message: string, active?: boolean) => showRecovery(state, [message, ...details].filter(Boolean).join(" "), active);
   if (health.recovery_error || health.recovery_state === "paused") {
     show("paused", `${health.recovery_error?.replaceAll("_", " ") ?? "Historical recovery is paused"}. Correct settings or request another recovery pass.`);
   } else if (health.recovery_pending) {
-    if (health.storage_paused || health.storage_state !== "ok") {
+    if (health.storage_paused || health.storage_state !== "ok" || health.polling_state === "storage_paused") {
       show("paused", "Recovery cannot continue while storage is paused or unavailable. Check Collection health and restore storage capacity.");
     } else if (health.polling_state === "stopped") {
       show("paused", config.polling_enabled
@@ -81,7 +81,7 @@ function updateRecovery(health: Snapshot["health"]): void {
       show("waiting", [
         `Recovery will retry after an upstream error: ${(health.error_code ?? "temporary upstream error").replaceAll("_", " ")}.`,
         health.next_attempt_at ? `Next collection attempt: ${new Date(health.next_attempt_at).toLocaleTimeString()}.` : "",
-      ].filter(Boolean).join(" "));
+      ].filter(Boolean).join(" "), false);
     } else if (health.recovery_active) {
       show("running", "Active-meter recovery is checking the next historical window with Octopus.");
     } else {

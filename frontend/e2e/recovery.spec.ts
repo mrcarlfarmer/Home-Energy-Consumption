@@ -136,7 +136,7 @@ test("recovery feedback distinguishes active work, waiting, pauses, completion a
   await expect(page.locator("#recovery-status")).toContainText("3 fifteen-minute windows");
   await emit({ polling_state: "backoff", error_code: "network_unavailable", next_attempt_at: new Date(at + 45000).toISOString() });
   await expect(feedback).toHaveAttribute("data-state", "waiting");
-  await expect(spinner).toBeVisible();
+  await expect(spinner).toBeHidden();
   await expect(page.locator("#recovery-status")).toContainText("network unavailable");
   await expect(page.locator("#recovery-status")).toContainText("Next collection attempt");
   await emit({ polling_state: "auth_error", error_code: "authentication_failed" });
@@ -207,4 +207,85 @@ test("requesting recovery animates until a rejected request reports an error rat
   await expect(page.locator("#recovery-state")).toHaveText("Recovery request failed");
   await expect(page.locator("#recovery-status")).toContainText("Recovery service temporarily unavailable");
   await expect(recover).toBeEnabled();
+});
+
+test("recovery activity is subtle, respects reduced motion and stops when collection cannot proceed", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await isolateRecoveryUpdates(page);
+  await page.goto("/");
+  await expect(page.locator("#analysis-status")).toContainText("observed hours");
+  const config = await (await page.request.get("/api/config")).json();
+  const snapshot: Snapshot = {
+    device_id: config.active_device_id, data_version: 1, reading: null,
+    health: {
+      polling_state: "running", telemetry_state: "fresh", storage_state: "ok",
+      error_code: null, last_success_at: null, next_attempt_at: null,
+      last_attempt_at: null, last_stored_at: null, recovery_incomplete: true,
+      low_disk: false, database_bytes: 0, disk_free_bytes: 104857600,
+      storage_budget_bytes: 2147483648, storage_paused: false,
+      maintenance_error: null, last_maintenance_at: null,
+      recovery_state: "pending", recovery_active: true, recovery_pending: true,
+      recovery_cursor_at: "2026-11-07T11:01:15Z",
+      recovery_target_at: "2026-11-08T10:27:30Z",
+      recovery_last_progress_at: "2026-11-08T10:20:00Z", recovery_gap_count: 0, recovery_error: null,
+    },
+  };
+  const publish = (health: Partial<Snapshot["health"]> = {}) => page.evaluate(value =>
+    window.dispatchEvent(new CustomEvent("fixture-recovery-snapshot", { detail: JSON.stringify(value) })),
+    { ...snapshot, health: { ...snapshot.health, ...health } });
+  const feedback = page.locator("#recovery-feedback");
+  const status = page.locator("#recovery-status");
+  const indicator = page.locator("#recovery-spinner");
+  await expect(indicator).toBeHidden();
+  await publish();
+  await expect(indicator).toBeVisible();
+  await expect(page.locator("#recovery-state")).toHaveText("Checking missing readings");
+  await expect(status).toContainText("Recovery cursor:");
+  await expect(status).toContainText("Target:");
+  await expect(feedback).toHaveAttribute("role", "status");
+  const spinner = () => indicator.evaluate(node => {
+    const style = getComputedStyle(node);
+    return { animation: style.animationName, width: style.width, transform: style.transform };
+  });
+  expect(await spinner()).toMatchObject({ animation: "recovery-spin", width: "12px" });
+  const initialTransform = (await spinner()).transform;
+  await expect.poll(async () => (await spinner()).transform).not.toBe(initialTransform);
+  expect(await status.evaluate(node => getComputedStyle(node, "::before").content)).toBe("none");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(indicator).toBeVisible();
+  expect(await spinner()).toMatchObject({ animation: "none", width: "12px" });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.setViewportSize({ width: 375, height: 812 });
+  const box = await feedback.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+
+  for (const [health, state] of [
+    [{ polling_state: "stopped" }, "paused"], [{ polling_state: "backoff" }, "waiting"],
+    [{ polling_state: "auth_error" }, "paused"], [{ polling_state: "configuration_error" }, "paused"],
+    [{ polling_state: "storage_paused" }, "paused"], [{ storage_state: "error" }, "paused"],
+    [{ storage_paused: true }, "paused"],
+  ] as const) {
+    await publish(health);
+    await expect(indicator).toBeHidden();
+    await expect(feedback).toHaveAttribute("data-state", state);
+    await publish();
+    await expect(indicator).toBeVisible();
+  }
+  await publish({ recovery_state: "paused", recovery_pending: false, recovery_error: "range_too_old" });
+  await expect(indicator).toBeHidden();
+  await expect(page.locator("#recovery-state")).toHaveText("Recovery paused");
+  await publish();
+  await expect(indicator).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-recovery-disconnect")));
+  await expect(indicator).toBeHidden();
+  await expect(status).toContainText("Reconnecting");
+  await publish();
+  await expect(indicator).toBeVisible();
+  await publish({ recovery_state: "complete", recovery_pending: false, recovery_incomplete: false });
+  await expect(indicator).toBeHidden();
+  await expect(page.locator("#recovery-state")).toHaveText("Recovery complete");
+  await expect(status).toContainText("recovery pass finished");
+  expect(errors).toEqual([]);
 });

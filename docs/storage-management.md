@@ -169,6 +169,13 @@ than relying on restarts to cure full/read-only/corrupt storage.
 Collection is started at service startup, not by login or an SSE connection.
 Browser closure, logout and session expiry do not stop it.
 
+The dashboard shows a small animated indicator beside the recovery status while
+requesting or processing recovery. It stops when collection is paused, recovery
+finishes, or the dashboard connection is lost. Reduced-motion preferences replace
+the animation with a static indicator; the dashboard remains usable throughout.
+During upstream retry backoff, the recovery status remains waiting but the
+animation stops until collection can proceed again.
+
 Before live collection, the collector persists a recovery cursor/target per meter.
 On first setup it attempts the configured horizon; following downtime it starts
 from the prior latest sample. Successful live polls and fifteen-minute backfill

@@ -124,8 +124,8 @@ section { margin-bottom: 22px; padding: 24px; border: 1px solid var(--line); bor
 .recovery-feedback[data-state="paused"] .recovery-heading, .recovery-feedback[data-state="incomplete"] .recovery-heading,
 .recovery-feedback[data-state="error"] .recovery-heading, .recovery-feedback[data-state="disconnected"] .recovery-heading { color: var(--chart-threshold); }
 .recovery-spinner {
-  width: 16px; height: 16px; flex: 0 0 16px; border: 2px solid var(--line);
-  border-top-color: var(--accent); border-radius: 50%; animation: recovery-spin .9s linear infinite;
+  width: 12px; height: 12px; flex: 0 0 12px; border: 2px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%; animation: recovery-spin 1.4s linear infinite;
 }
 @keyframes recovery-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .recovery-spinner { animation: none; } }
