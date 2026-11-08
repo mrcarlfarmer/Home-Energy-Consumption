@@ -39,6 +39,10 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
   return found as T;
 }
 function text(id: string, value: string): void { element(id).textContent = value; }
+function showRecoveryStatus(message: string, active = false): void {
+  text("recovery-status", message);
+  element("recovery-status").classList.toggle("recovering", active);
+}
 function number(value: number | null, digits = 2): string {
   return value === null ? "Unavailable" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
@@ -340,6 +344,7 @@ function connect(): void {
   stream.onopen = () => text("stream-health", "Dashboard connected");
   stream.onerror = async () => {
     text("stream-health", "Reconnecting to dashboard...");
+    if (recoveryPending) showRecoveryStatus("Recovery status unavailable while reconnecting to the dashboard.");
     try { await session(); } catch (error) { showError(error); }
   };
   stream.addEventListener("snapshot", (event: MessageEvent<string>) => {
@@ -353,14 +358,17 @@ function connect(): void {
       const h = snapshot.health;
       const recoveryFinished = recoveryPending && !h.recovery_pending && !h.recovery_error;
       recoveryPending = h.recovery_pending;
-      if (h.recovery_error) text("recovery-status", `Recovery paused: ${h.recovery_error.replaceAll("_", " ")}. Correct settings or request another recovery pass.`);
-      else if (h.recovery_pending) text("recovery-status", [
-        "Active-meter recovery in progress.",
+      const recoveryActive = h.recovery_pending && !h.recovery_error && h.polling_state === "running"
+        && h.storage_state === "ok" && !h.storage_paused;
+      if (h.recovery_error) showRecoveryStatus(`Recovery paused: ${h.recovery_error.replaceAll("_", " ")}. Correct settings or request another recovery pass.`);
+      else if (h.recovery_pending) showRecoveryStatus([
+        recoveryActive ? "Active-meter recovery in progress." : "Active-meter recovery waiting for collection to resume.",
         h.recovery_cursor_at ? `Checking from ${new Date(h.recovery_cursor_at).toLocaleString()}.` : "",
         h.recovery_target_at ? `Target: ${new Date(h.recovery_target_at).toLocaleString()}.` : "",
-        "Live and historical requests alternate at the configured polling interval.",
-      ].filter(Boolean).join(" "));
-      else if (recoveryFinished) text("recovery-status", "Recovery pass finished. Any remaining gaps are still missing from the available readings; check Collection health for unavailable windows.");
+        recoveryActive ? "Live and historical requests alternate at the configured polling interval."
+          : "Recovery will continue when meter collection resumes.",
+      ].filter(Boolean).join(" "), recoveryActive);
+      else if (recoveryFinished) showRecoveryStatus("Recovery pass finished. Any remaining gaps are still missing from the available readings; check Collection health for unavailable windows.");
       const ev = snapshot.home_assistant;
       text("home-assistant-health", ev
         ? [
@@ -537,16 +545,16 @@ async function renderDashboard(): Promise<void> {
     if (!recoveryRange) return;
     const current = generation;
     recoveryBusy = true; fillRecovery(); clearMessage();
-    text("recovery-status", "Requesting historical recovery for the selected range...");
+    showRecoveryStatus("Requesting historical recovery for the selected range...", true);
     try {
       const queued = await api<RecoveryStatus>("/api/recovery", {
         ...recoveryRange, expected_revision: config.revision,
       });
       if (current !== generation) return;
-      text("recovery-status", `Recovery queued: ${new Date(queued.from).toLocaleString()} to ${new Date(queued.to).toLocaleString()}. Existing pending work is retained; missing readings will be retried in fifteen-minute chunks.`);
+      showRecoveryStatus(`Recovery queued: ${new Date(queued.from).toLocaleString()} to ${new Date(queued.to).toLocaleString()}. Existing pending work is retained; missing readings will be retried in fifteen-minute chunks.`);
     } catch (error) {
       if (current === generation) {
-        text("recovery-status", error instanceof Error ? error.message : "Historical recovery could not be requested.");
+        showRecoveryStatus(error instanceof Error ? error.message : "Historical recovery could not be requested.");
         showError(error);
       }
     } finally {
