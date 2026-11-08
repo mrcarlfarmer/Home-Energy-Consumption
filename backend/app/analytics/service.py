@@ -354,8 +354,10 @@ class Analytics:
                         datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
                     ),
                 )
+                pricing_start = left
                 if source is not None:
                     supported_start = max(left, int(retained["raw_before_us"]))
+                    pricing_start = supported_start
                     m = (
                         await self.aggregate(conn, device, supported_start, right, budget, source)
                         if supported_start < right
@@ -369,6 +371,9 @@ class Analytics:
                         "from": iso(left),
                         "to": iso(right),
                         **describe(m, right - left),
+                        "pricing": await self.price_threshold(
+                            conn, device, pricing_start, right, m, budget, source
+                        ),
                     }
                 )
                 left, date = right, date + timedelta(days=1)

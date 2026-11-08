@@ -195,6 +195,11 @@ Old-range rejection, empty responses, partial coverage and aged-out work are rec
 explicitly. A chunk's presence does not promise complete coverage. These windows are
 reported as unresolved by this recovery attempt, not proof that upstream data can
 never become available. Rejected/empty/partial chunks are not retried forever.
+The graph displays an animated queued/checking/waiting indicator, the current
+cursor and target, and the last completed-chunk time. It explicitly distinguishes
+paused recovery, a completed pass, and a completed pass with unresolved windows.
+The stored completion state remains visible after reconnecting or reloading.
+Lost live updates are marked unknown, rather than pretending recovery finished.
 No half-hour consumption fallback is fabricated or mixed into demand/peak metrics.
 Storage-paused collection makes no recovery requests until capacity is restored.
 

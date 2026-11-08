@@ -40,6 +40,9 @@ async def test_five_calendar_peaks_respect_timezone_dst_and_half_open_end(
     assert result["daily_peaks"][-1]["requested_seconds"] == hours * 3600
     assert all(day["sampled_peak_w"] is None for day in result["daily_peaks"])
     assert all(day["coverage_pct"] == 0 for day in result["daily_peaks"])
+    assert all(day["pricing"]["enabled"] is False for day in result["daily_peaks"])
+    assert all(day["pricing"]["energy_when_above_gbp"] is None for day in result["daily_peaks"])
+    assert all(day["pricing"]["excess_energy_gbp"] is None for day in result["daily_peaks"])
 
 
 async def test_daily_peak_table_includes_readings_before_a_short_chart_window(store: Store) -> None:
@@ -131,6 +134,12 @@ async def test_daily_peaks_endpoint_requires_session_and_rejects_bad_inputs(tmp_
         result = await client.get("/api/analytics/daily-peaks", params=params)
         assert result.status_code == 200
         assert len(result.json()["daily_peaks"]) == 5
+        pricing = result.json()["daily_peaks"][-1]["pricing"]
+        assert pricing["enabled"] is False
+        assert pricing["available"] is False
+        assert pricing["energy_when_above_gbp"] is None
+        assert pricing["excess_energy_gbp"] is None
+        assert "Enable tariff pricing" in pricing["warning"]
         for field, value in [
             ("to", "not-a-time"),
             ("to", "1969-12-31T23:59:59Z"),

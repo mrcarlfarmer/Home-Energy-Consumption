@@ -610,9 +610,13 @@ class Store:
                 )
             )[0]
         return {
+            "recovery_state": row["status"] if row else "idle",
             "recovery_pending": bool(row and row["status"] == "pending"),
             "recovery_cursor_at": iso(row["cursor_us"]) if row else None,
             "recovery_target_at": iso(row["target_us"]) if row else None,
+            "recovery_last_progress_at": iso(row["last_attempt_us"])
+            if row and row["last_attempt_us"] is not None
+            else None,
             "recovery_gap_count": int(gaps),
             "recovery_error": row["error_code"] if row else None,
             "recovery_incomplete": bool(gaps or (row and row["status"] != "complete")),

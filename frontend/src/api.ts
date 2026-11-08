@@ -29,8 +29,10 @@ export interface Snapshot {
     database_bytes: number | null; disk_free_bytes: number | null;
     storage_budget_bytes: number; storage_paused: boolean;
     maintenance_error: string | null; last_maintenance_at: string | null;
+    recovery_state: "idle" | "pending" | "complete" | "paused"; recovery_active: boolean;
     recovery_pending: boolean; recovery_cursor_at: string | null;
     recovery_target_at: string | null; recovery_gap_count: number;
+    recovery_last_progress_at: string | null;
     recovery_error: string | null;
   };
   home_assistant?: {
@@ -47,6 +49,12 @@ export interface StorageStatus {
   policy: { raw_days: number; five_minute_days: number; daily_days: number; recovery_days: number };
   retention: { raw_before_us: number; five_before_us: number; archive_timezone: string | null } | null;
 }
+export interface PricingEstimate {
+  enabled: boolean; available: boolean;
+  energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
+  price_coverage_pct: number | null; priced_seconds_above: number;
+  fetched_at: string | null; warning: string;
+}
 export interface Summary extends Metrics {
   device_id: string;
   warnings: string[];
@@ -57,16 +65,11 @@ export interface Summary extends Metrics {
     energy_when_above_kwh: number | null; excess_energy_kwh: number | null;
   }[];
   daily_peaks: (Metrics & { date: string })[];
-  pricing: {
-    enabled: boolean; available: boolean;
-    energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
-    price_coverage_pct: number | null; priced_seconds_above: number;
-    fetched_at: string | null; warning: string;
-  };
+  pricing: PricingEstimate;
 }
 export interface DailyPeaks {
   timezone: string; from: string; to: string; warnings: string[];
-  daily_peaks: (Metrics & { date: string })[];
+  daily_peaks: (Metrics & { date: string; pricing: PricingEstimate })[];
 }
 export interface History {
   from: string; to: string;
