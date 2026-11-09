@@ -5,6 +5,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -391,10 +392,14 @@ class TariffPricing:
             await self.publish()
 
     async def status(
-        self, interval: tuple[int, int] | None = None, selected: str | None = None
+        self,
+        interval: tuple[int, int] | None = None,
+        selected: str | None = None,
+        *,
+        connection: aiosqlite.Connection | None = None,
     ) -> dict[str, Any]:
         start, end = interval if interval is not None else (now_us(), now_us() + DAY_US)
-        async with self.store.read() as conn:
+        async with self.store.read() if connection is None else nullcontext(connection) as conn:
             async with conn.execute("SELECT * FROM app_config WHERE singleton=1") as cursor:
                 row = await cursor.fetchone()
             assert row is not None

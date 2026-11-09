@@ -202,6 +202,28 @@ new bonus periods. See the [methodology](docs/analytics-methodology.md).
 This version upgrades the database to schema 8. Take a consistent private backup
 before upgrading; rolling back to an older application requires that backup.
 
+## Daily analysis
+
+Select a date in **Daily sampled peaks** to open that calendar day's detail page.
+The links retain the selected meter, calendar timezone and EV analysis basis, and
+can be bookmarked or opened in another tab. The page uses the full local day,
+not the table's possibly clipped window; today ends at request time. Clock-change
+days retain their actual 23/25-hour duration.
+
+**Daily demand** shows supported energy, peaks, the 6 kW comparison, applicable
+excess costs, peak-window inspection and a grid/non-EV comparison. **EV & tariff**
+separates recorded charging from scheduled and estimated bonus household slots.
+**Coverage & events** distinguishes meter gaps, missing Ohme evidence, charging
+transition guards and observed exceedance episodes, with an eligible meter-only
+recovery action. Missing data and unavailable prices are never represented as
+zero. Archived days retain grid metrics at their actual resolution; EV exclusion
+and detailed events require raw history.
+
+Daily views are fixed snapshots with manual refresh; live collection continues.
+Returning to the overview in the same tab preserves its range and scroll position.
+These views describe evidence, not appliance diagnoses, complete-day extrapolations
+or guaranteed battery savings.
+
 ## Documentation
 
 - [Deployment and HTTPS](docs/deployment.md)

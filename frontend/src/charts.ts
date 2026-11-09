@@ -5,6 +5,12 @@ import type { History, TariffStatus } from "./api";
 export interface ChartIndicators {
   offPeak: boolean; bonus: boolean; charging: boolean; unresolved: boolean; threshold: boolean;
 }
+interface ChartContext {
+  timezone?: string;
+  grid?: History | null;
+  gaps?: { from: string; to: string }[];
+  transitions?: { from: string; to: string }[];
+}
 
 export class DemandChart {
   private plot?: uPlot;
@@ -21,6 +27,7 @@ export class DemandChart {
   update(
     history: History, rates: TariffStatus["rates"],
     charging: TariffStatus["charging"] = [], unresolved: TariffStatus["unresolved"] = [],
+    context: ChartContext = {},
   ): void {
     this.plot?.destroy();
     const s = history.series;
@@ -35,6 +42,8 @@ export class DemandChart {
     const bonus = seconds(rates.filter(rate => rate.band === "EV_BONUS"));
     const chargingBands = seconds(charging);
     const unknownBands = seconds(unresolved);
+    const gapBands = seconds(context.gaps ?? []);
+    const transitionBands = seconds(context.transitions ?? []);
     const visibleBands = (plot: uPlot, bands = offPeak): number[][] => bands.map(([from, to]) => [
       Math.max(from, plot.scales.x.min!), Math.min(to, plot.scales.x.max!),
     ]).filter(([from, to]) => from < to);
@@ -45,6 +54,7 @@ export class DemandChart {
       for (const [bands, token, strip] of [
         [offPeak, "--chart-off-peak", false], [bonus, "--chart-bonus", false],
         [unknownBands, "--chart-unknown", true], [chargingBands, "--chart-charging", true],
+        [gapBands, "--chart-gap", false], [transitionBands, "--chart-transition", false],
       ] as const) {
         ctx.fillStyle = color(token);
         for (const [from, to] of visibleBands(plot, bands)) {
@@ -90,16 +100,25 @@ export class DemandChart {
       scales: { x: { min: new Date(history.from).getTime() / 1000, max: new Date(history.to).getTime() / 1000 } },
       hooks: { drawClear: [shadeOffPeak], draw: [drawThreshold] },
       series: [
-        { label: "Bucket end" },
+        { label: "Bucket end", ...(context.timezone ? { value: (_plot: uPlot, value: number) =>
+          value == null ? "--" : new Date(value * 1000).toLocaleString(undefined, { timeZone: context.timezone, timeZoneName: "short" }) } : {}) },
         { label: "Observed mean (W)", stroke: color("--chart-mean"), width: 2, spanGaps: false },
         { label: "Sampled peak (W)", stroke: color("--chart-peak"), width: 1, spanGaps: false },
+        ...(context.grid ? [{ label: "Grid peak reference (W)", stroke: color("--muted"), width: 1, dash: [3, 3], spanGaps: false }] : []),
       ],
       axes: [
-        { ...axis },
+        { ...axis, ...(context.timezone ? { values: (_plot: uPlot, splits: number[]) =>
+          splits.map(value => new Date(value * 1000).toLocaleTimeString(undefined, {
+            timeZone: context.timezone, hour: "2-digit", minute: "2-digit", hour12: false,
+          })) } : {}) },
         { ...axis, label: history.method.power_basis === "nonnegative_grid_import_excluding_ev"
           ? "Non-EV grid import (W)" : "Grid import (W)", size: 65 },
       ],
-    }, [s.bucket_end_epoch_s, means, s.sampled_peak_w], this.target);
+    }, [s.bucket_end_epoch_s, means, s.sampled_peak_w,
+      ...(context.grid ? [context.grid.series.sampled_peak_w] : [])], this.target);
+  }
+  focus(start: number, end: number): void {
+    this.plot?.setScale("x", { min: start, max: end });
   }
   clear(): void {
     this.plot?.destroy(); this.plot = undefined;

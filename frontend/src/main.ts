@@ -1,5 +1,6 @@
 import { api, ApiError, authenticationRequired, Config, DailyPeaks, Device, History, RecoveryStatus, session, Snapshot, StorageStatus, Summary, TariffStatus } from "./api";
 import { DemandChart } from "./charts";
+import { DailyPage, dayLink } from "./daily";
 import "./styles.css";
 
 declare const __APP_VERSION__: string;
@@ -28,6 +29,11 @@ let followLatest = true;
 let autoRefresh = true;
 let pendingAutomatic = false;
 let analysisDirty = false;
+let dailyPage: DailyPage | undefined;
+let dailyVisible = false;
+let overviewScroll = 0;
+let overviewInterrupted = false;
+let overviewLoaded = false;
 
 function fillRecovery(): void {
   element<HTMLButtonElement>("recover-history").disabled = recoveryBusy || !config.polling_enabled
@@ -191,6 +197,8 @@ function cleanup(): void {
   chart?.destroy(); chart = undefined;
   pending?.abort(); pending = undefined;
   pendingAutomatic = false;
+  dailyPage?.destroy(); dailyPage = undefined;
+  dailyVisible = false; overviewInterrupted = false; overviewLoaded = false;
 }
 function renderLogin(message = ""): void {
   cleanup();
@@ -316,6 +324,7 @@ function fillAutoRefresh(): void {
     : "Graph auto-refresh is off. Live readings and meter polling continue unchanged; use Refresh graph to update this view.");
 }
 async function refresh(automatic = false, attempt = 0): Promise<void> {
+  if (dailyVisible) return;
   if (automatic && pending && attempt === 0) return;
   analysisDirty = false;
   recoveryRange = undefined; fillRecovery();
@@ -428,8 +437,15 @@ async function refresh(automatic = false, attempt = 0): Promise<void> {
       : `Daily peaks unavailable: ${peakError}`);
     for (const day of [...peaks?.daily_peaks ?? []].reverse()) {
       const row = days.insertRow();
+      const link = document.createElement("a");
+      link.href = dayLink(day.date, selected, peaks!.timezone, excludeEV);
+      link.textContent = day.date;
+      link.className = "day-date-link";
+      link.setAttribute("aria-label", `View analysis for ${day.date}`);
+      link.onclick = () => { overviewScroll = window.scrollY; };
+      row.insertCell().append(link);
       for (const value of [
-        day.date, day.sampled_peak_w === null ? "Unavailable" : `${number(day.sampled_peak_w / 1000)} kW`,
+        day.sampled_peak_w === null ? "Unavailable" : `${number(day.sampled_peak_w / 1000)} kW`,
         `${number(day.coverage_pct)}%`,
       ]) row.insertCell().textContent = value;
       const cell = row.insertCell();
@@ -442,6 +458,7 @@ async function refresh(automatic = false, attempt = 0): Promise<void> {
     text("off-peak-status", tariffNote);
     showCharging(tariff);
     chart?.update(history, rates, tariff?.charging, tariff?.unresolved);
+    overviewLoaded = true;
     lastRefresh = Date.now();
   } catch (error) {
     if (!controller.signal.aborted && current === generation) {
@@ -456,10 +473,12 @@ function connect(): void {
   stream?.close();
   stream = new EventSource("/api/telemetry/live");
   stream.onopen = () => {
+    dailyPage?.connection(true);
     recoveryConnected = true;
     text("stream-health", "Dashboard connected");
   };
   stream.onerror = async () => {
+    dailyPage?.connection(false);
     recoveryConnected = false;
     text("stream-health", "Reconnecting to dashboard...");
     if (recoveryPending || recoveryBusy) showRecovery("disconnected",
@@ -469,6 +488,7 @@ function connect(): void {
   stream.addEventListener("snapshot", (event: MessageEvent<string>) => {
     try {
       const snapshot: Snapshot = JSON.parse(event.data);
+      dailyPage?.update(snapshot);
       const demand = snapshot.reading?.demand_w ?? null;
       text("demand", demand === null ? "--" : number(Math.abs(demand) >= 1000 ? demand / 1000 : demand));
       text("demand-unit", demand !== null && Math.abs(demand) >= 1000 ? "kW" : "W");
@@ -520,7 +540,7 @@ function connect(): void {
       const versionChanged = snapshot.data_version !== lastVersion;
       lastVersion = snapshot.data_version;
       analysisDirty ||= versionChanged || recoveryFinished;
-      if (autoRefresh && !pending && (recoveryFinished || (analysisDirty && Date.now() - lastRefresh > 60000)) && !document.hidden) {
+      if (!dailyVisible && autoRefresh && !pending && (recoveryFinished || (analysisDirty && Date.now() - lastRefresh > 60000)) && !document.hidden) {
         if (followLatest && selectedMinutes) setRange(selectedMinutes);
         void refresh(true);
       }
@@ -529,14 +549,29 @@ function connect(): void {
 }
 function route(): void {
   const settings = location.hash === "#settings";
-  element("overview").hidden = settings;
+  const wasDaily = dailyVisible;
+  dailyVisible = location.hash.startsWith("#day/");
+  element("overview").hidden = settings || dailyVisible;
   element("settings-page").hidden = !settings;
-  for (const link of document.querySelectorAll<HTMLAnchorElement>("nav a")) {
+  element("daily-page").hidden = !dailyVisible;
+  if (dailyVisible) {
+    if (!wasDaily) { overviewInterrupted = !!pending || !overviewLoaded; pending?.abort(); }
+    clearMessage();
+    void dailyPage?.open(location.hash, !wasDaily).catch(showError);
+    window.scrollTo(0, 0);
+  } else {
+    dailyPage?.hide();
+    if (wasDaily && !settings) {
+      requestAnimationFrame(() => { window.scrollTo(0, overviewScroll); });
+    }
+    if (!settings && overviewInterrupted) { overviewInterrupted = false; void refresh(); }
+  }
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(".sidebar nav a")) {
     if (link.hash === "#settings") link.setAttribute("aria-current", String(settings));
     else link.removeAttribute("aria-current");
   }
   if (settings) window.scrollTo(0, 0);
-  else if (location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  else if (!dailyVisible && !wasDaily && location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }
 async function renderDashboard(): Promise<void> {
   cleanup();
@@ -618,9 +653,10 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
     <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention, omitting the minute either side of recorded charging starts/stops; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
-    </main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
+    </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();
   void loadTariff();
+  dailyPage = new DailyPage(element("daily-page"), () => config, showError);
   window.onhashchange = route; route();
   chart = new DemandChart(element("chart"), visible => {
     element("off-peak-key").hidden = !visible.offPeak;
