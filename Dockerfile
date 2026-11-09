@@ -4,6 +4,8 @@ WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
+ARG APP_BUILD_VERSION
+ENV APP_BUILD_VERSION=$APP_BUILD_VERSION
 RUN npm run build
 
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS python-builder

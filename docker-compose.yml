@@ -2,6 +2,8 @@ services:
   energy:
     build:
       context: .
+      args:
+        APP_BUILD_VERSION: "${APP_BUILD_VERSION:-}"
     image: home-energy-monitor:local
     ports:
       - "${LAN_BIND_ADDRESS:?Set the Pi LAN address}:8443:8443"

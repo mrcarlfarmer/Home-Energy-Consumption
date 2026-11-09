@@ -105,7 +105,7 @@ The stack retains the 140 MiB memory limit, no extra swap allowance, non-root us
 
 ## 5. Open the dashboard
 
-Open **`http://home.energy:8080`**, not `https://`. Sign in with `admin` (or `ENERGY_ADMIN_USERNAME`) and your password. All telemetry, history and settings require login. Existing Octopus settings/history are retained. A persistent warning identifies unencrypted HTTP.
+Open **`http://home.energy:8080`**, not `https://`. Sign in with `admin` (or `ENERGY_ADMIN_USERNAME`) and your password. All telemetry, history and settings require login. Existing Octopus settings/history are retained. The sign-in page identifies unencrypted HTTP; the dashboard does not display a persistent transport warning bar.
 
 Sessions survive restarts and expire 12 hours after sign-in. Cookies are HttpOnly/SameSite=Strict but cannot be Secure in HTTP mode. Mutations require CSRF and a trusted Origin. HSTS is not sent over HTTP.
 

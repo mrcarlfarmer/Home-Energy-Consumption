@@ -2,6 +2,9 @@ import { api, ApiError, authenticationRequired, Config, DailyPeaks, Device, Hist
 import { DemandChart } from "./charts";
 import "./styles.css";
 
+declare const __APP_VERSION__: string;
+const [buildNumber, buildRevision, buildDirty] = __APP_VERSION__.split("-");
+const versionMarkup = `<p class="app-version" aria-label="Application version">Build ${buildNumber} (${buildRevision}${buildDirty ? ", uncommitted changes" : ""})</p>`;
 const root = document.querySelector<HTMLDivElement>("#app")!;
 const transportNotice = location.protocol === "http:"
   ? "HTTP connection: data and API-key entry are not encrypted in transit. Use a trusted LAN only."
@@ -196,7 +199,7 @@ function renderLogin(message = ""): void {
     <form id="login"><label>Username<input id="username" autocomplete="username" value="admin" maxlength="64" required></label>
     <label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
     <button type="submit">Sign in</button></form><p id="message" role="alert"></p>
-    <small>${transportNotice || "Credentials stay on your Raspberry Pi. Use your trusted HTTPS address."}</small></main>`;
+    <small>${transportNotice || "Credentials stay on your Raspberry Pi. Use your trusted HTTPS address."}</small>${versionMarkup}</main>`;
   text("message", message);
   element<HTMLFormElement>("login").onsubmit = async (event) => {
     event.preventDefault(); clearMessage();
@@ -550,7 +553,6 @@ async function renderDashboard(): Promise<void> {
     </nav></aside><div class="workspace"><p id="message" role="alert"></p><main id="overview">
     <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Home Energy<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
-    ${transportNotice ? `<p class="transport-warning" role="note">${transportNotice}</p>` : ""}
     <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
     <article><span class="channel">CH.02</span><p id="energy-label">Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
     <article><span class="channel">CH.03</span><p id="peak-label">Sampled peak</p><strong id="peak">--</strong><small id="peak-hint">Highest observed reading</small></article>
@@ -616,7 +618,7 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
     <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
-    </main><footer>Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
+    </main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();
   void loadTariff();
   window.onhashchange = route; route();
