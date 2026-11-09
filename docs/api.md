@@ -222,6 +222,53 @@ cost/history/indicator revisions. Standing charges and account-specific discount
 are excluded; supplier-specific EV billing adjustments are not independently
 verified. Exceeding 6 kW is not itself a penalty.
 
+### Calendar-day detail
+
+`GET /api/analytics/day?date=YYYY-MM-DD&timezone=Europe/London` accepts optional
+`device_id` and `exclude_ev` (default false). It uses the same authentication,
+analytical query lane and timeout as the other analytics endpoints. Invalid
+dates/timezones, future dates and days before the supported epoch return 422.
+The date describes a local calendar day, including 23/25-hour DST days; today
+ends at request time. `calendar_to` retains the actual next local midnight.
+Daily archives use their recorded calendar timezone, reported explicitly if it
+differs from the requested timezone.
+
+One read transaction supplies `grid` and nullable `adjusted` summaries,
+the selected-basis `history`, nullable `grid_history` for an EV-excluded chart
+reference, `tariff`, original positive-power `charging` periods, `meter_gaps` and
+derived `transition_gaps`. Chart gap ranges are not truncated with the event log.
+Configuration, telemetry and cached-price reads share the
+same SQLite snapshot. `date`, `today`, `timezone`, `from`, `to`, `calendar_to`,
+`partial`, `device_id`, `data_version` and `config_revision` identify that snapshot.
+`ev_savings_from` gives its configured policy date, not a later configuration read.
+`exclude_ev` reports the basis actually returned. When EV analysis is not
+configured or raw history has expired, `adjusted` is null,
+`ev_unavailable_reason` explains why, and grid analysis remains available rather
+than masquerading as non-EV data.
+
+`coverage` gives `meter_seconds`, nullable `ev_seconds`, `joint_seconds` (before
+guards), and `adjusted_seconds` (after guards). EV coverage describes the
+requested day, separately from tariff eligibility coverage and price coverage.
+`peak_overlaps_ev` is true/false only when an original known EV state covers the
+selected peak timestamp; otherwise it is null, not an assertion of no charging.
+Overlap does not prove that charging caused the whole peak.
+
+`events` includes at most 200 chronological `meter_gap`, `ev_gap`,
+`ev_transition` and selected-basis `exceedance` periods, each with `from`, `to`
+and nullable `peak_w`. `event_count` exposes truncation. Exceedance episodes
+join contiguous supported segments strictly above 6 kW; unsupported time breaks
+them. No episode bridges a missing period. Archived events are not reconstructed;
+`raw_available` and `warnings` explain their absence.
+`recovery_available` indicates whether this active-meter day is eligible for the
+existing `POST /api/recovery` action. It never starts polling or recovers Ohme
+history, and mutations still enforce their normal revision and eligibility checks.
+
+All metrics are observed-period results, not full-day projections or a bill.
+Frontend day links use `#day/YYYY-MM-DD/{demand|ev|coverage}` with meter, calendar
+timezone and EV basis in their query string. The pages are fixed snapshots until
+manually refreshed; navigation preserves the overview range and scroll position
+within the current document.
+
 Each `/api/analytics/daily-peaks` row's `pricing` has the same fields and
 availability rules as the summary estimate, calculated independently over that
 row's actual calendar-day bounds. It prices both all energy while demand exceeds

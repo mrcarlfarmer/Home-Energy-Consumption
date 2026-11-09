@@ -92,6 +92,26 @@ export interface History {
     coverage_pct: number[]; rolling_15m_coverage_pct: number[];
   };
 }
+export interface DayEvent {
+  kind: "meter_gap" | "ev_gap" | "ev_transition" | "exceedance";
+  from: string; to: string; peak_w: number | null;
+}
+export interface DayAnalysis {
+  date: string; today: string; timezone: string;
+  from: string; to: string; calendar_to: string; partial: boolean;
+  device_id: string; data_version: number; config_revision: number;
+  ev_savings_from: string | null;
+  exclude_ev: boolean; ev_unavailable_reason: string | null;
+  grid: Summary; adjusted: Summary | null;
+  history: History; grid_history: History | null; tariff: TariffStatus;
+  charging: { from: string; to: string }[];
+  meter_gaps: { from: string; to: string }[];
+  transition_gaps: { from: string; to: string }[];
+  coverage: { meter_seconds: number; ev_seconds: number | null; joint_seconds: number | null; adjusted_seconds: number | null };
+  peak_overlaps_ev: boolean | null;
+  events: DayEvent[]; event_count: number;
+  raw_available: boolean; recovery_available: boolean; warnings: string[];
+}
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }

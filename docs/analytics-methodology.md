@@ -220,6 +220,29 @@ enabled and fetched. The daily telemetry coverage remains separate from price
 coverage, which is included in each cost cell's explanation. Missing-rate and
 pricing-disabled explanations appear below the table heading.
 
+Dates in this table link to a dedicated local-calendar-day analysis. Unlike a
+clipped final table row, this page requests the entire selected calendar day
+(or midnight to the request time for today). Its metrics, chart, applicable
+rates and both analysis bases come from one database read snapshot. The day
+boundary uses the selected IANA timezone, not the browser timezone or a fixed
+24-hour offset; archived daily data explicitly uses its stored calendar timezone.
+
+The day findings identify whether a known original EV state covers the selected
+peak timestamp. Missing EV state leaves attribution unknown, even when there is
+no recorded positive-power period nearby. An overlap is not an appliance
+diagnosis or proof that the EV caused the entire peak. Grid and adjusted totals
+may describe different supported periods, so their difference is not EV energy.
+
+The event log derives meter gaps from the complement of supported meter segments,
+EV gaps from missing known Recorder intervals, transition gaps from the existing
+exclusion guard, and exceedance episodes from contiguous supported segments
+strictly above 6 kW in the selected basis. Below-threshold time or missing evidence
+breaks an episode. Event detail requires raw readings; archives retain their
+metrics without invented events. Logs show at most 200 chronological events,
+with the total count and truncation explained. Peak inspection zooms the chart
+without changing the day totals. Coverage, price availability and recovery
+limitations remain explicit in every view.
+
 The browser plots observed mean and sampled peak only. The history API retains
 trailing 15-minute demand for compatibility: the import integral over the
 previous 900 seconds divided by 900, evaluated at each chart bucket's end.

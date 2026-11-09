@@ -230,3 +230,44 @@ class History(TimeRange):
     series: HistorySeries
     method: Method
     warnings: list[str]
+
+
+class DayCoverage(BaseModel):
+    meter_seconds: float
+    ev_seconds: float | None
+    joint_seconds: float | None
+    adjusted_seconds: float | None
+
+
+class DayEvent(TimeRange):
+    kind: Literal["meter_gap", "ev_gap", "ev_transition", "exceedance"]
+    peak_w: int | None
+
+
+class DayAnalysis(TimeRange):
+    date: str
+    today: str
+    timezone: str
+    calendar_to: str
+    partial: bool
+    device_id: str
+    data_version: int
+    config_revision: int
+    ev_savings_from: str | None
+    exclude_ev: bool
+    ev_unavailable_reason: str | None
+    grid: Summary
+    adjusted: Summary | None
+    history: History
+    grid_history: History | None
+    tariff: TariffStatus
+    charging: list[TimeRange]
+    meter_gaps: list[TimeRange]
+    transition_gaps: list[TimeRange]
+    coverage: DayCoverage
+    peak_overlaps_ev: bool | None
+    events: list[DayEvent]
+    event_count: int
+    raw_available: bool
+    recovery_available: bool
+    warnings: list[str]

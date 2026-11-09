@@ -16,6 +16,8 @@
   --chart-charging: #8ed8f8;
   --chart-unknown: #f3bd6a;
   --chart-threshold: #f2cba9;
+  --chart-gap: #665d7e24;
+  --chart-transition: #f2cba928;
   color: var(--ink);
   background: var(--bg);
 }
@@ -161,6 +163,83 @@ footer { font-size: .65rem; line-height: 1.8; color: var(--muted); }
 .skip-link { position: fixed; top: 10px; left: 10px; transform: translateY(-160%); padding: 12px; z-index: 10; background: var(--accent); color: var(--bg); }
 .skip-link:focus { transform: translateY(0); }
 section, main { scroll-margin-top: 18px; }
+.day-date-link { text-decoration: underline; text-underline-offset: 4px; }
+.day-breadcrumb { display: flex; flex-wrap: wrap; gap: 16px; font-size: .7rem; margin-bottom: 24px; color: var(--muted); }
+.day-breadcrumb a, .day-tabs a, .day-findings a, .day-notice a { color: var(--accent); }
+.day-heading .note { margin-bottom: 0; }
+.day-date-controls { display: flex; align-items: end; gap: 8px; }
+.day-date-label { font-size: .65rem; }
+.day-button { display: inline-block; padding: 11px 12px; border: 1px solid var(--line); text-decoration: none; font-size: .8rem; }
+.day-button:hover { color: var(--accent); background: var(--raised); }
+.day-button.disabled { color: var(--muted); opacity: .4; }
+.day-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+.day-tabs { display: flex; gap: 24px; }
+.day-tabs a { font-size: .75rem; display: block; padding: 16px 0; text-decoration: none; border-bottom: 2px solid transparent; color: var(--muted); }
+.day-tabs a[aria-current="page"] { color: var(--accent); border-color: var(--accent); }
+.day-basis { display: flex; align-items: center; gap: 5px; font-size: .65rem; padding: 10px 0; }
+.day-basis span { margin-right: 8px; color: var(--muted); }
+.day-basis button { padding: 8px; background: transparent; color: var(--muted); border-color: var(--line); font-size: .65rem; }
+.day-basis button[aria-pressed="true"] { color: var(--ink); background: var(--raised); border-color: var(--accent); }
+.day-notice { border: 1px solid #715441; background: linear-gradient(110deg, #392b294d, #1b1a2b); padding: 16px; color: var(--muted); font-size: .7rem; line-height: 1.8; margin-bottom: 22px; }
+.day-notice strong { color: var(--chart-threshold); font-weight: 500; }
+.day-notice a { display: inline-block; margin-left: 5px; }
+.day-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.day-metrics strong { font-size: clamp(1.3rem, 2.4vw, 2rem); }
+.day-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 22px; align-items: start; }
+.day-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.day-panel { padding: 22px; }
+.day-panel h2 { margin-bottom: 14px; }
+.day-panel p { font-size: .75rem; }
+.day-panel .note { font-size: .7rem; }
+.day-chart-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-chart-controls button { font-size: .65rem; padding: 7px 9px; }
+#day-chart { min-width: 0; width: 100%; margin-top: 16px; }
+.day-findings article { padding: 14px 0; border-top: 1px solid var(--line); }
+.day-findings article:last-child { padding-bottom: 0; }
+.day-findings h3 { font-weight: 500; line-height: 1.7; margin: 0 0 8px; }
+.day-findings p { color: var(--muted); font-size: .7rem; margin: 8px 0; }
+.day-findings a { font-size: .7rem; }
+.day-findings button { margin-top: 8px; font-size: .7rem; }
+.day-facts { font-size: .7rem; margin: 18px 0; }
+.day-facts div { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); padding: 12px 0; }
+.day-facts dt { color: var(--muted); }
+.day-facts dd { margin: 0; text-align: right; line-height: 1.8; }
+.day-health { margin: 20px 0; }
+.day-health div { display: flex; justify-content: space-between; gap: 15px; flex-wrap: wrap; font-size: .7rem; margin-bottom: 8px; }
+.day-health span { color: var(--muted); }
+.day-health meter { display: block; width: 100%; height: 10px; margin-bottom: 7px; background: var(--bg); border: 0; border-radius: 0; }
+.day-health meter::-webkit-meter-bar { background: var(--bg); border: 0; border-radius: 0; }
+.day-health meter::-webkit-meter-optimum-value { background: var(--chart-mean); }
+.day-health meter::-moz-meter-bar { background: var(--chart-mean); }
+.day-health small { font-size: .65rem; }
+.day-reading { padding-left: 18px; font-size: .75rem; color: var(--muted); }
+.day-reading li { margin: 16px 0; line-height: 1.8; }
+.day-reading strong { color: var(--ink); font-weight: 500; }
+.day-event-note { white-space: normal; min-width: 200px; line-height: 1.8; color: var(--muted); }
+.day-gap-key::before, .day-transition-key::before { content: ""; display: inline-block; width: 18px; height: 12px; margin-right: 6px; vertical-align: middle; }
+.day-gap-key::before { background: var(--chart-gap); border: 1px solid #665d7e; }
+.day-transition-key::before { background: var(--chart-transition); border: 1px solid #a17b55; }
+.day-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; font-size: .65rem; color: var(--muted); line-height: 1.8; border-top: 1px solid var(--line); padding-top: 20px; }
+.day-status:empty { display: none; }
+@media (max-width: 1150px) {
+  .day-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .day-findings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 20px; }
+  .day-findings > .eyebrow, .day-findings > h2 { grid-column: 1 / -1; }
+  .day-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .day-heading { flex-direction: column; align-items: stretch; }
+  .day-date-controls { width: 100%; }
+  .day-date-label { flex: 1; }
+  .day-tabs { gap: 18px; }
+  .day-tabs a { font-size: .65rem; }
+  .day-basis { width: 100%; border-top: 1px solid var(--line); }
+  .day-basis span { flex: 1; }
+  .day-two, .day-findings { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .day-panel { padding: 18px; }
+  .day-metrics strong { font-size: 1.4rem; }
+  .day-footer { flex-direction: column; align-items: start; }
+}
 @media (max-width: 1150px) {
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metrics .threshold-card { grid-column: 1 / -1; }

@@ -1,6 +1,7 @@
 import json
 from bisect import bisect_left, bisect_right
 from collections.abc import AsyncIterator
+from contextlib import nullcontext
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -284,12 +285,14 @@ class Analytics:
         timezone: str,
         selected: str | None = None,
         exclude_ev: bool = False,
+        *,
+        connection: aiosqlite.Connection | None = None,
     ) -> dict[str, Any]:
         zone = ZoneInfo(timezone)
         days: list[dict[str, Any]] = []
         total = Metrics()
         budget = [120]
-        async with self.store.read() as conn:
+        async with self.store.read() if connection is None else nullcontext(connection) as conn:
             device, version = await self.device(conn, selected)
             source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, _, warnings = await self.retained_range(
@@ -505,6 +508,8 @@ class Analytics:
         maximum: int,
         selected: str | None = None,
         exclude_ev: bool = False,
+        *,
+        connection: aiosqlite.Connection | None = None,
     ) -> dict[str, Any]:
         step = interval_for(start, end, interval, maximum)
         series: dict[str, list[float | None]] = {
@@ -522,7 +527,7 @@ class Analytics:
             )
         }
         budget = [120]
-        async with self.store.read() as conn:
+        async with self.store.read() if connection is None else nullcontext(connection) as conn:
             device, version = await self.device(conn, selected)
             source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, retained, warnings = await self.retained_range(conn, device, start, end)

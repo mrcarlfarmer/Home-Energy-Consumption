@@ -20,11 +20,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.analytics.day import daily_analysis
 from app.analytics.service import Analytics, Rebuilding, bounds
 from app.api_models import (
     AuthState,
     Connectivity,
     DailyPeaks,
+    DayAnalysis,
     History,
     HomeAssistantConnectivity,
     PublicConfig,
@@ -636,6 +638,18 @@ def create_app(
             return await analytics.daily_peaks(end, timezone, device_id, exclude_ev)
 
         return await analytical(operation)
+
+    @app.get("/api/analytics/day", response_model=DayAnalysis)
+    async def day_analysis(
+        session: SessionDep,
+        date: str,
+        timezone: str = "Europe/London",
+        device_id: str | None = None,
+        exclude_ev: bool = False,
+    ) -> dict[str, Any]:
+        return await analytical(
+            lambda: daily_analysis(analytics, tariff_pricing, date, timezone, device_id, exclude_ev)
+        )
 
     @app.get("/api/openapi.json")
     async def openapi(session: SessionDep) -> dict[str, Any]:
