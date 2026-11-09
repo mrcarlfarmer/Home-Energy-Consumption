@@ -11,6 +11,7 @@ from app.db.store import Store, one
 from app.main import create_app
 from app.models import ConfigUpdate, EVInterval, Reading, TariffRate, iso, timestamp_us
 from app.settings import Settings
+from app.storage import DAY_US
 from conftest import DEVICE
 from pydantic import SecretStr, ValidationError
 
@@ -137,10 +138,71 @@ async def test_ten_minutes_award_whole_half_hour_and_price_exact_excess(store: S
     zoom = await analytics.summary(START, START + MINUTE, "UTC")
     assert zoom["pricing"]["excess_energy_gbp"] == pytest.approx(2 / 60 * 0.08)
     adjusted = await analytics.summary(START, START + HALF_HOUR, "UTC", exclude_ev=True)
-    assert adjusted["pricing"]["excess_energy_gbp"] == pytest.approx((2 * 20 + 1 * 10) / 60 * 0.08)
+    assert adjusted["observed_seconds"] == 26 * 60
+    assert adjusted["pricing"]["excess_energy_gbp"] == pytest.approx((2 * 18 + 1 * 8) / 60 * 0.08)
     assert adjusted["pricing"]["pricing_revision"] == summary["pricing"]["pricing_revision"]
     daily = await analytics.daily_peaks(START + HALF_HOUR, "UTC")
     assert daily["daily_peaks"][-1]["pricing"]["excess_energy_gbp"] == pytest.approx(0.08)
+
+
+async def test_exclusion_guards_do_not_remove_short_charge_bonus_eligibility(store: Store) -> None:
+    config = await configure(store)
+    await cache(store, config)
+    on, off = START + 7 * MINUTE, START + 7 * MINUTE + 20_000_000
+    await history(
+        store,
+        config,
+        [
+            EVInterval(START, on, 0),
+            EVInterval(on, off, 7_000_000),
+            EVInterval(off, START + HALF_HOUR, 0),
+        ],
+    )
+    await demand(store, config, START, START + HALF_HOUR)
+    resolved = await resolve(store)
+    analytics = Analytics(store)
+    grid = await analytics.summary(START, START + HALF_HOUR, "UTC")
+    adjusted = await analytics.summary(START, START + HALF_HOUR, "UTC", exclude_ev=True)
+    assert resolved.ev_coverage_pct == 100
+    assert resolved.charging == [(on, off)]
+    assert resolved.rates[0].band == "EV_BONUS"
+    assert adjusted["observed_seconds"] == 1660
+    assert adjusted["pricing"]["priced_seconds_above"] == 1660
+    assert adjusted["pricing"]["excess_energy_gbp"] == pytest.approx(2 * 1660 / 3600 * 0.08)
+    assert grid["pricing"]["excess_energy_gbp"] == pytest.approx(0.08)
+    assert adjusted["pricing"]["pricing_revision"] == grid["pricing"]["pricing_revision"]
+    guarded = await analytics.summary(on - 30_000_000, off + 30_000_000, "UTC", exclude_ev=True)
+    assert guarded["observed_seconds"] == 0
+    assert guarded["sampled_peak_w"] is None
+    assert guarded["pricing"]["available"] is False
+    assert guarded["pricing"]["excess_energy_gbp"] is None
+    assert (await resolve(store)).charging == resolved.charging
+
+
+async def test_exclusion_guard_crosses_daily_pricing_and_chart_cache_chunks(store: Store) -> None:
+    config = await configure(store)
+    boundary = START + DAY_US
+    left, right = boundary - 2 * MINUTE, boundary + 3 * MINUTE
+    transition = boundary + 30_000_000
+    await history(
+        store,
+        config,
+        [EVInterval(left, transition, 0), EVInterval(transition, right, 7_000_000)],
+    )
+    await demand(store, config, left, right)
+    await cache(store, config, START, right, band="ECO7_NIGHT")
+    analytics = Analytics(store)
+    adjusted = await analytics.summary(START, right, "UTC", exclude_ev=True)
+    chart = await analytics.history(START, right, "1m", 1500, exclude_ev=True)
+    daily = (await analytics.daily_peaks(right, "UTC", exclude_ev=True))["daily_peaks"]
+    assert adjusted["observed_seconds"] == 180
+    assert adjusted["thresholds"][0]["seconds_above"] == 90
+    assert adjusted["import_energy_kwh"] == pytest.approx(0.225)
+    assert adjusted["pricing"]["priced_seconds_above"] == 90
+    assert adjusted["pricing"]["excess_energy_gbp"] == pytest.approx(0.004)
+    assert sum(chart["series"]["observed_seconds"]) == adjusted["observed_seconds"]
+    assert sum(day["observed_seconds"] for day in daily) == adjusted["observed_seconds"]
+    assert daily[-1]["pricing"]["excess_energy_gbp"] == adjusted["pricing"]["excess_energy_gbp"]
 
 
 async def test_missing_ev_history_is_not_a_peak_price_but_known_zero_is(store: Store) -> None:

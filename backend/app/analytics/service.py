@@ -8,7 +8,14 @@ from zoneinfo import ZoneInfo
 import aiosqlite
 
 from app.analytics.effective_rates import HOUSEHOLD_WARNING, effective_rates
-from app.analytics.intervals import Metrics, integrate, integrate_without_ev, supported_segments
+from app.analytics.intervals import (
+    EV_TRANSITION_GUARD_US,
+    Metrics,
+    ev_exclusion_intervals,
+    integrate,
+    integrate_without_ev,
+    supported_segments,
+)
 from app.analytics.pricing import PricedThreshold
 from app.db.store import Store, one
 from app.home_assistant import ev_source
@@ -35,10 +42,12 @@ METHOD = {
 EV_METHOD = {
     **METHOD,
     "power_basis": "nonnegative_grid_import_excluding_ev",
-    "integration": "meter_previous_sample_hold_minus_recorded_ev_state_hold",
+    "integration": "meter_previous_sample_hold_minus_recorded_ev_state_hold_with_start_stop_gaps",
 }
 EV_WARNINGS = [
     "EV exclusion is a recorded-state estimate, not total household load",
+    "The 60 seconds before and after recorded EV charging starts/stops are unknown "
+    "because meter and Ohme updates are not synchronized; coverage and costs exclude these periods",
     "Unreported Home Assistant outages may leave stale recorded states; unavailable states are excluded",
 ]
 
@@ -234,6 +243,19 @@ class Analytics:
                     else:
                         yield bucket, self.store.rollup_metrics(row)
 
+    async def ev_exclusion_history(
+        self, conn: aiosqlite.Connection, source: str, start: int, end: int
+    ) -> list[EVInterval]:
+        # Include neighbouring transitions even when they lie outside a bucket/day/query.
+        return ev_exclusion_intervals(
+            await self.store.ev_rows(
+                conn,
+                source,
+                max(0, start - EV_TRANSITION_GUARD_US),
+                end + EV_TRANSITION_GUARD_US,
+            )
+        )
+
     async def aggregate(
         self,
         conn: aiosqlite.Connection,
@@ -246,7 +268,7 @@ class Analytics:
         if source is not None:
             return integrate_without_ev(
                 await self.store.raw_rows(conn, device, start, end),
-                await self.store.ev_rows(conn, source, start, end),
+                await self.ev_exclusion_history(conn, source, start, end),
                 start,
                 end,
             )
@@ -432,7 +454,7 @@ class Analytics:
             for left in range(start, end, DAY_US):
                 right = min(end, left + DAY_US)
                 raw = await self.store.raw_rows(conn, device, left, right)
-                ev = await self.store.ev_rows(conn, source, left, right)
+                ev = await self.ev_exclusion_history(conn, source, left, right)
                 cost.add_segments(supported_segments(raw, left, right, ev), rates)
         else:
             retained = await self.store.retention(conn, device)
@@ -555,7 +577,7 @@ class Analytics:
                         cache_right = max(b, min(end, a + DAY_US))
                         ev_raw = await self.store.raw_rows(conn, device, cache_left, cache_right)
                         ev_times = [r[0] for r in ev_raw]
-                        ev_intervals = await self.store.ev_rows(
+                        ev_intervals = await self.ev_exclusion_history(
                             conn, source, cache_left, cache_right
                         )
                         ev_starts = [r.start for r in ev_intervals]

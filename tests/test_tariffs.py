@@ -553,10 +553,11 @@ async def test_exact_threshold_zero_and_negative_prices(
     assert daily[-1]["pricing"] == result
 
 
+@pytest.mark.parametrize("seconds,observed,above", [(60, 0, 0), (600, 280, 140)])
 async def test_ev_adjusted_costs_use_joint_coverage_and_ignore_standing_charge(
-    store: Store,
+    store: Store, seconds: int, observed: int, above: int
 ) -> None:
-    config = await seed(store)
+    config = await seed(store, seconds=seconds)
     await store.save_config(
         ConfigUpdate(
             expected_revision=config["revision"],
@@ -567,29 +568,35 @@ async def test_ev_adjusted_costs_use_joint_coverage_and_ignore_standing_charge(
         )
     )
     config = await store.config()
+    end = START + seconds * 1_000_000
+    third = seconds // 3 * 1_000_000
     await store.save_ev_history(
         config,
         START,
-        START + 60_000_000,
+        end,
         [
-            EVInterval(START, START + 20_000_000, 7_000_000),
-            EVInterval(START + 20_000_000, START + 40_000_000, 0),
-            EVInterval(START + 40_000_000, START + 60_000_000, None),
+            EVInterval(START, START + third, 7_000_000),
+            EVInterval(START + third, START + 2 * third, 0),
+            EVInterval(START + 2 * third, end, None),
         ],
     )
     await store.save_tariff_rates(
         config,
         START,
-        START + 60_000_000,
-        [TariffRate(START, START + 60_000_000, Decimal(30), CODE, "STANDARD")],
-        cache_details(START, START + 60_000_000),
+        end,
+        [TariffRate(START, end, Decimal(30), CODE, "STANDARD")],
+        cache_details(START, end),
     )
-    result = await Analytics(store).summary(START, START + 60_000_000, "UTC", exclude_ev=True)
-    assert result["observed_seconds"] == 40
-    assert result["pricing"]["energy_when_above_gbp"] == pytest.approx(0.0133333333)
-    assert result["pricing"]["excess_energy_gbp"] == pytest.approx(0.0033333333)
-    assert result["pricing"]["priced_seconds_above"] == 20
-    daily = await Analytics(store).daily_peaks(START + 60_000_000, "UTC", exclude_ev=True)
+    result = await Analytics(store).summary(START, end, "UTC", exclude_ev=True)
+    assert result["observed_seconds"] == observed
+    assert result["pricing"]["energy_when_above_gbp"] == (
+        pytest.approx(8 * above / 3600 * 0.3) if observed else None
+    )
+    assert result["pricing"]["excess_energy_gbp"] == (
+        pytest.approx(2 * above / 3600 * 0.3) if observed else None
+    )
+    assert result["pricing"]["priced_seconds_above"] == above
+    daily = await Analytics(store).daily_peaks(end, "UTC", exclude_ev=True)
     assert daily["daily_peaks"][-1]["pricing"] == result["pricing"]
 
 

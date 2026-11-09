@@ -11,16 +11,27 @@ test("Home Assistant settings and real EV-excluded analytics remain separate fro
   await expect(page.locator("#above-6kw-time")).toHaveText("2 h");
   await expect(page.locator("#home-assistant-health")).toContainText("running");
 
+  const adjustedHistory = page.waitForResponse(response =>
+    response.url().includes("/api/analytics/history?") && response.url().includes("exclude_ev=true"),
+  );
   await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).check();
   await expect(page.locator("#energy-label")).toHaveText("Estimated non-EV import");
-  await expect(page.locator("#energy")).toHaveText("5.5 kWh");
-  await expect(page.locator("#above-6kw-time")).toHaveText("30 min");
-  await expect(page.locator("#above-6kw-energy")).toHaveText("4 kWh");
-  await expect(page.locator("#above-6kw-excess")).toHaveText("1 kWh");
-  await expect(page.locator("#coverage-hint")).toHaveText("Joint meter / Ohme coverage");
+  await expect(page.locator("#energy")).toHaveText("5.35 kWh");
+  await expect(page.locator("#above-6kw-time")).toHaveText("29 min");
+  await expect(page.locator("#above-6kw-energy")).toHaveText("3.867 kWh");
+  await expect(page.locator("#above-6kw-excess")).toHaveText("0.967 kWh");
+  await expect(page.locator("#coverage")).toHaveText("8.19%");
+  await expect(page.locator("#coverage-hint")).toHaveText("Joint meter / Ohme, minus transition gaps");
+  await expect(page.locator("#analysis-basis-note")).toContainText("minute before and after recorded charging starts/stops is unknown");
+  const history = await (await adjustedHistory).json();
+  expect(history.warnings.some((warning: string) => warning.includes("60 seconds before and after"))).toBe(true);
+  expect(history.series.observed_seconds.reduce((total: number, seconds: number) => total + seconds, 0)).toBe(7080);
+  const peaks: (number | null)[] = history.series.sampled_peak_w;
+  expect(peaks.some((peak, index) => peak === null &&
+    peaks.slice(0, index).includes(1000) && peaks.slice(index + 1).includes(8000))).toBe(true);
   await expect(page.locator("#above-6kw-hint")).toContainText("excluding EV");
   await expect(page.locator("#days-label")).toHaveText("Daily derived non-EV peaks");
-  await expect(page.locator("#thresholds tr").last()).toContainText("4 kWh");
+  await expect(page.locator("#thresholds tr").last()).toContainText("3.867 kWh");
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
   await expect(page.locator("#thresholds tr").first()).toContainText("6 kW");
   await expect(page.locator("#chart canvas").first()).toBeVisible();
@@ -46,7 +57,7 @@ test("Home Assistant settings and real EV-excluded analytics remain separate fro
 
   await page.getByRole("link", { name: "Overview", exact: true }).click();
   await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).check();
-  await expect(page.locator("#above-6kw-time")).toHaveText("30 min");
+  await expect(page.locator("#above-6kw-time")).toHaveText("29 min");
   await page.route("**/api/analytics/summary?**", async route => {
     await route.fulfill({ status: 503, json: { detail: "Synthetic analysis failure" } });
   });
