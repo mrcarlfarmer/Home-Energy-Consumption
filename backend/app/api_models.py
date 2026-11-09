@@ -24,6 +24,7 @@ class PublicConfig(BaseModel):
     home_assistant_enabled: bool
     has_home_assistant_token: bool
     tariff_pricing_enabled: bool
+    ev_savings_from: str | None = None
 
 
 class AuthState(BaseModel):
@@ -154,6 +155,7 @@ class PricingEstimate(BaseModel):
     priced_seconds_above: float
     fetched_at: str | None
     warning: str
+    pricing_revision: str | None = None
 
 
 class DailyPeakMetrics(DailyMetrics):
@@ -177,6 +179,11 @@ class TariffStatus(BaseModel):
     schedule: str | None
     rates: list[TariffPrice]
     warnings: list[str]
+    pricing_revision: str | None = None
+    adjustment_enabled: bool = False
+    ev_coverage_pct: float | None = None
+    charging: list[TimeRange] = Field(default_factory=list)
+    unresolved: list[TimeRange] = Field(default_factory=list)
 
 
 class RecoveryStatus(TimeRange):

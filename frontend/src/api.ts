@@ -6,6 +6,7 @@ export interface Config {
   home_assistant_url: string | null; home_assistant_entity: string | null;
   home_assistant_enabled: boolean; has_home_assistant_token: boolean;
   tariff_pricing_enabled: boolean;
+  ev_savings_from: string | null;
 }
 export interface TariffStatus {
   enabled: boolean; state: string; error_code: string | null;
@@ -13,6 +14,11 @@ export interface TariffStatus {
   tariff_name: string | null; tariff_code: string | null; schedule: string | null;
   rates: { from: string; to: string; pence_per_kwh: number; band: string }[];
   warnings: string[];
+  pricing_revision: string | null;
+  adjustment_enabled: boolean;
+  ev_coverage_pct: number | null;
+  charging: { from: string; to: string }[];
+  unresolved: { from: string; to: string }[];
 }
 export interface RecoveryStatus {
   device_id: string; from: string; to: string; state: "pending";
@@ -54,9 +60,11 @@ export interface PricingEstimate {
   energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
   price_coverage_pct: number | null; priced_seconds_above: number;
   fetched_at: string | null; warning: string;
+  pricing_revision: string | null;
 }
 export interface Summary extends Metrics {
   device_id: string;
+  data_version: number;
   warnings: string[];
   from: string; to: string;
   method: { power_basis: string };
@@ -73,6 +81,7 @@ export interface DailyPeaks {
 }
 export interface History {
   from: string; to: string;
+  data_version: number;
   interval_seconds: number;
   bucket_alignment: string; warnings: string[];
   method: { power_basis: string };

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiosqlite
 import httpx
 
+from app.analytics.effective_rates import HOUSEHOLD_WARNING, effective_rates
 from app.db.store import Conflict, Store
 from app.kraken import Kraken, KrakenError, retry_after
 from app.models import TariffRate, iso, now_us, timestamp_us
@@ -244,6 +245,7 @@ class OctopusTariffs:
             raise KrakenError("tariff_discovery_contract_error") from exc
         result: list[TariffRate] = []
         descriptions: list[dict[str, Any]] = []
+        off_peak_rates: list[dict[str, Any]] = []
         windows: list[tuple[int, int]] = []
         for agreement in agreements:
             if not isinstance(agreement, dict):
@@ -284,6 +286,15 @@ class OctopusTariffs:
             else:
                 zone, slots = schedule
                 bands = {band: await self.rates(product, code, band, a, b) for band, _, _ in slots}
+                off_peak_rates.extend(
+                    {
+                        "from": iso(row.start),
+                        "to": iso(row.end),
+                        "pence_per_kwh": str(row.pence_per_kwh),
+                        "tariff_code": row.tariff_code,
+                    }
+                    for row in bands["ECO7_NIGHT"]
+                )
                 indices = {band: 0 for band in bands}
                 for left in range(a // HALF_HOUR_US * HALF_HOUR_US, b, HALF_HOUR_US):
                     local = datetime.fromisoformat(iso(left)).astimezone(zone)
@@ -311,11 +322,16 @@ class OctopusTariffs:
                     "name": name,
                     "tariff_code": code,
                     "schedule": description,
+                    "smart_ev": product.startswith("INTELLI-") and schedule is not None,
                 }
             )
         if not result:
             raise KrakenError("tariff_rates_missing")
-        return normalized(result), {"agreements": descriptions, "warnings": [PRICING_WARNING]}
+        return normalized(result), {
+            "agreements": descriptions,
+            "off_peak_rates": off_peak_rates,
+            "warnings": [PRICING_WARNING],
+        }
 
 
 class TariffPricing:
@@ -377,19 +393,27 @@ class TariffPricing:
     async def status(
         self, interval: tuple[int, int] | None = None, selected: str | None = None
     ) -> dict[str, Any]:
-        config = await self.store.config()
         start, end = interval if interval is not None else (now_us(), now_us() + DAY_US)
         async with self.store.read() as conn:
+            async with conn.execute("SELECT * FROM app_config WHERE singleton=1") as cursor:
+                row = await cursor.fetchone()
+            assert row is not None
+            config = dict(row)
             snapshot = (
                 await self.store.tariff_snapshot(conn, config)
                 if selected is None or selected == config["active_device_id"]
                 else None
             )
-            rates = (
-                await self.store.tariff_rows(conn, snapshot["source"], start, end)
-                if snapshot
-                else []
+            resolved = await effective_rates(
+                self.store,
+                conn,
+                config,
+                selected or config["active_device_id"] or "",
+                start,
+                end,
+                snapshot,
             )
+            rates = resolved.rates
         details = json.loads(snapshot["details_json"]) if snapshot else {}
         at = now_us()
         current = next(
@@ -427,10 +451,21 @@ class TariffPricing:
                 }
                 for row in rates
             ],
-            "warnings": details.get("warnings", [])
+            "pricing_revision": resolved.revision,
+            "adjustment_enabled": resolved.adjustment_enabled,
+            "ev_coverage_pct": resolved.ev_coverage_pct,
+            "charging": [{"from": iso(a), "to": iso(b)} for a, b in resolved.charging],
+            "unresolved": [{"from": iso(a), "to": iso(b)} for a, b in resolved.unresolved],
+            "warnings": (
+                [HOUSEHOLD_WARNING]
+                + [warning for warning in details.get("warnings", []) if warning != PRICING_WARNING]
+                if resolved.adjustment_enabled
+                else details.get("warnings", [])
+            )
+            + resolved.warnings
             + (
                 ["No cached household rates cover the requested period. Fetch pricing again."]
-                if snapshot and not rates
+                if snapshot and not rates and not resolved.unresolved
                 else []
             ),
         }

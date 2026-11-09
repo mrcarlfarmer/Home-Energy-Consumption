@@ -1,7 +1,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 from urllib.parse import urlsplit
@@ -105,6 +105,17 @@ class ConfigUpdate(BaseModel):
     home_assistant_entity: str | None = Field(default=None, max_length=255)
     home_assistant_enabled: bool | None = None
     tariff_pricing_enabled: bool | None = None
+    ev_savings_from: str | None = Field(default=None, max_length=10)
+
+    @field_validator("ev_savings_from")
+    @classmethod
+    def savings_date(cls, value: str | None) -> str | None:
+        if value is not None:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) or date.fromisoformat(value) < date(
+                1970, 1, 1
+            ):
+                raise ValueError("Enter the Prioritise Savings start date as YYYY-MM-DD")
+        return value
 
     @field_validator("home_assistant_url")
     @classmethod
