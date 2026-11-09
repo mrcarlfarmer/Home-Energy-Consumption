@@ -12,6 +12,9 @@
   --chart-mean: #a6dfe7;
   --chart-peak: #bbabff;
   --chart-off-peak: #6ccfb522;
+  --chart-bonus: #a98cff33;
+  --chart-charging: #8ed8f8;
+  --chart-unknown: #f3bd6a;
   --chart-threshold: #f2cba9;
   color: var(--ink);
   background: var(--bg);
@@ -110,6 +113,10 @@ section { margin-bottom: 22px; padding: 24px; border: 1px solid var(--line); bor
 .chart-indicators { display: flex; flex-wrap: wrap; gap: 16px; font-size: .7rem; color: var(--muted); margin: 12px 0; }
 .chart-indicators [hidden] { display: none; }
 .off-peak-key::before { content: ""; display: inline-block; width: 18px; height: 12px; background: var(--chart-off-peak); border: 1px solid #6ccfb5; margin-right: 6px; }
+.bonus-key::before, .charging-key::before, .unresolved-key::before { content: ""; display: inline-block; width: 18px; height: 12px; margin-right: 6px; }
+.bonus-key::before { background: var(--chart-bonus); border: 1px solid #a98cff; }
+.charging-key::before { background: var(--chart-charging); height: 4px; }
+.unresolved-key::before { background: var(--chart-unknown); height: 4px; }
 .threshold-key { color: var(--chart-threshold); }
 .threshold-key::before { content: ""; display: inline-block; width: 18px; border-top: 1px dashed var(--chart-threshold); margin: 0 6px 3px 0; }
 #daily-peaks { margin-top: 26px; }

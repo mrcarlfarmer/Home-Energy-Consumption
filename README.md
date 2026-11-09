@@ -9,6 +9,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - 5-minute through 30-day shortcuts (including 12 hours), custom history, sampled peaks and an expanded five-day peaks table.
 - Reference comparison at 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
 - Optional Octopus household tariff pricing, with separate estimated costs for all energy while above 6 kW and only the excess.
+- Optional Intelligent Octopus Go bonus half-hours inferred from Ohme history under an explicit Prioritise Savings assumption.
 - Optional Ohme power history from Home Assistant, with a separate EV-excluded analysis view and joint-data coverage.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
 - Always-on collection, restart-safe gap recovery, bounded storage, 30-day raw / 396-day five-minute / ten-year daily history, and gap/coverage reporting with local-calendar/DST handling.
@@ -54,8 +55,11 @@ the current time; choose a preset to return to a live-following window.
 joint meter/Home Assistant data. The graph shows observed mean and sampled peak,
 without the trailing fifteen-minute curve. A dashed **6 kW** reference appears
 when within the visible power scale. Shading identifies API-defined household
-off-peak intervals that overlap the view, using cached tariff pricing; missing
-or older tariff periods are not guessed. Fetch rates in Settings first.
+off-peak intervals and, when configured, estimated EV bonus half-hours. Separate
+strips identify observed charging and unresolved rates. Expand **EV charging and
+bonus-rate periods** for timestamps and prices. These indicators work in both EV
+analysis modes and clip to chart zoom; missing periods are not guessed.
+Fetch rates in Settings first.
 
 **Daily sampled peaks** is always expanded and shows five calendar days ending
 at the viewed window, newest first, independently of the graph's duration.
@@ -142,8 +146,9 @@ The app discovers dated import agreements and retrieves published unit rates
 including VAT. For supported day/night tariffs, including Intelligent Octopus Go,
 it uses the account API's household schedule rather than guessing off-peak times.
 Rate changes and UK clock changes are respected. These are household-rate
-estimates, excluding standing charges, EV-specific smart-charging adjustments and
-account-specific discounts, not an Octopus bill or guaranteed battery savings.
+estimates, excluding standing charges and account-specific discounts, not an
+Octopus bill or guaranteed battery savings. Without the optional assumption below,
+smart-charging adjustments remain excluded.
 Exceeding 6 kW does not itself incur an extra Octopus charge.
 
 Choose **Excluding EV charging** to price supported non-EV grid import using Home
@@ -155,7 +160,41 @@ older periods may have no applicable prices. Unsupported schedules or
 payment-method-specific feeds are reported explicitly, not guessed. See the
 [methodology](docs/analytics-methodology.md) for archived-data limitations.
 
-This version upgrades the database to schema 7. Take a consistent private backup
+### Ohme bonus off-peak periods
+
+If **all** your charging uses Intelligent Octopus Go **Prioritise Savings**,
+enter the date this became true in **Settings > Tariff pricing > Prioritise
+Savings start date**, save, then **Fetch Octopus pricing**. For example, enter
+`2026-10-01` for 1 October 2026. Leave it blank to keep published-schedule pricing.
+The date is interpreted in Europe/London, independently of browser timezone.
+
+From that date, recorded positive Ohme power earns an **estimated off-peak rate
+for the entire settlement half-hour**, not just the charging minutes. The rate
+uses the dated night price for the matching Intelligent agreement. This changes
+the above-6 kW tile, comparison row and daily excess costs consistently, including
+when EV demand is excluded. It never changes measured demand or threshold energy.
+
+This is an explicit assumption, not automatic detection of smart versus Max
+charging or independent verification of the six-hour allowance. Do not enable it
+if you use Max/Boost or Prioritise Target beyond the allowance. Clear the date if
+that policy changes. Account/meter or Ohme URL/entity changes through partial API
+updates clear it unless explicitly reconfirmed.
+
+Missing EV evidence does not prove a half-hour was charged at the peak rate:
+affected daytime costs remain unavailable. A supported charge can establish a
+bonus even if other minutes in that half-hour are missing. Historical zero
+charging requires complete recorded half-hour coverage. An unfinished/future slot
+can still earn a bonus, so it is not guaranteed peak-priced.
+
+Existing power history is reused, including corrections and backfill; no extra
+Home Assistant entities, automations or charger controls are required. Stale
+Recorder states, standby/preconditioning power and solar/battery behaviour can
+affect inference. A home battery supplying only the house does not change earned
+rate periods, but the graph still measures grid import, not total household load
+or battery savings. Archived data without retained EV evidence cannot establish
+new bonus periods. See the [methodology](docs/analytics-methodology.md).
+
+This version upgrades the database to schema 8. Take a consistent private backup
 before upgrading; rolling back to an older application requires that backup.
 
 ## Documentation

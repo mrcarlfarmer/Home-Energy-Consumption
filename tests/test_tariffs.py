@@ -206,7 +206,7 @@ async def test_home_day_night_schedule_uses_real_dst_and_rate_changes(
 
     client = FixtureKraken(account([agreement(True)]), upstream)
     try:
-        rows, _ = await OctopusTariffs(client).fetch(
+        rows, details = await OctopusTariffs(client).fetch(
             {"octopus_api_key": "test-key", "account_number": "A-TEST", "active_device_id": DEVICE},
             start,
             end,
@@ -218,6 +218,11 @@ async def test_home_day_night_schedule_uses_real_dst_and_rate_changes(
         assert rows[0].start == start and rows[-1].end == end
         assert any(row.start == change and row.pence_per_kwh == 12 for row in rows)
         assert all(row.band not in ("EV_DEVICE_PEAK", "EV_DEVICE_OFF_PEAK") for row in rows)
+        assert details["off_peak_rates"] == [
+            {"from": iso(start), "to": iso(change), "pence_per_kwh": "10", "tariff_code": CODE},
+            {"from": iso(change), "to": iso(end), "pence_per_kwh": "12", "tariff_code": CODE},
+        ]
+        assert details["agreements"][0]["smart_ev"] is False
     finally:
         await client.close()
 
@@ -850,5 +855,42 @@ async def test_historical_overlay_uses_only_cached_applicable_bands(store: Store
         assert not missing["rates"]
         assert missing["state"] == "rates_unavailable"
         assert await store.config() == config
+    finally:
+        await client.close()
+
+
+async def test_intelligent_daytime_fetch_preserves_matching_dated_night_prices() -> None:
+    start = timestamp_us("2026-10-26T18:00:00Z")
+    candidate = agreement(True)
+    product = "INTELLI-VAR-26-01-01"
+    code = f"E-1R-{product}-A"
+    candidate["tariff"].update(productCode=product, tariffCode=code)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "next": None,
+                "results": [public_rate(8 if "/night-unit-rates/" in request.url.path else 30)],
+            },
+        )
+
+    client = FixtureKraken(account([candidate]), upstream)
+    try:
+        rows, details = await OctopusTariffs(client).fetch(
+            {"octopus_api_key": "test-key", "account_number": "A-TEST", "active_device_id": DEVICE},
+            start,
+            start + 1800_000_000,
+        )
+        assert [row.band for row in rows] == ["ECO7_DAY"]
+        assert details["agreements"][0]["smart_ev"] is True
+        assert details["off_peak_rates"] == [
+            {
+                "from": iso(start),
+                "to": iso(start + 1800_000_000),
+                "pence_per_kwh": "8",
+                "tariff_code": code,
+            }
+        ]
     finally:
         await client.close()

@@ -102,6 +102,7 @@ class Store:
                         "005_six_kw_threshold.sql",
                         "006_tariff_pricing.sql",
                         "007_requested_recovery.sql",
+                        "008_ev_bonus_rates.sql",
                     )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
@@ -171,6 +172,7 @@ class Store:
         async with self.write() as conn:
             config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
             previous_identity = (config["account_number"], config["active_device_id"])
+            previous_ev_source = (config["home_assistant_url"], config["home_assistant_entity"])
             if config["revision"] != update.expected_revision:
                 raise Conflict("Settings changed; reload before saving")
             for field in update.model_fields_set - {"expected_revision"}:
@@ -209,6 +211,19 @@ class Store:
                 config[x] for x in ("octopus_api_key", "account_number", "active_device_id")
             ):
                 raise ValueError("An API key, account and meter are required for tariff pricing")
+            if config["ev_savings_from"] and not all(
+                config[x]
+                for x in ("home_assistant_url", "home_assistant_entity", "active_device_id")
+            ):
+                raise ValueError(
+                    "Configure the Ohme power source and meter before enabling bonus rates"
+                )
+            if (
+                previous_identity != (config["account_number"], config["active_device_id"])
+                or previous_ev_source
+                != (config["home_assistant_url"], config["home_assistant_entity"])
+            ) and "ev_savings_from" not in update.model_fields_set:
+                config["ev_savings_from"] = None
             if config["active_device_id"]:
                 if not config["account_number"]:
                     raise ValueError("An account is required for the selected device")
@@ -226,7 +241,7 @@ class Store:
                 "UPDATE app_config SET revision=revision+1,account_number=?,active_device_id=?,"
                 "octopus_api_key=?,polling_enabled=?,poll_interval_seconds=?,display_timezone=?,"
                 "home_assistant_url=?,home_assistant_token=?,home_assistant_entity=?,home_assistant_enabled=?,"
-                "tariff_pricing_enabled=?,updated_at_us=? WHERE singleton=1",
+                "tariff_pricing_enabled=?,ev_savings_from=?,updated_at_us=? WHERE singleton=1",
                 tuple(
                     config[x]
                     for x in (
@@ -241,6 +256,7 @@ class Store:
                         "home_assistant_entity",
                         "home_assistant_enabled",
                         "tariff_pricing_enabled",
+                        "ev_savings_from",
                     )
                 )
                 + (now_us(),),

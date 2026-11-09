@@ -111,6 +111,29 @@ function number(value: number | null, digits = 2): string {
 function money(value: number | null): string {
   return value === null ? "Unavailable" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(value);
 }
+function showCharging(status?: TariffStatus): void {
+  const body = element<HTMLTableSectionElement>("charging-periods");
+  body.replaceChildren();
+  const events = [
+    ...(status?.charging ?? []).map(interval => ({ ...interval, label: "Observed EV charging", price: "--" })),
+    ...(status?.rates ?? []).filter(rate => rate.band === "EV_BONUS")
+      .map(rate => ({ ...rate, label: "Estimated bonus household slot", price: `${number(rate.pence_per_kwh, 5)} p/kWh` })),
+    ...(status?.unresolved ?? []).map(interval => ({ ...interval, label: "Unresolved household rate", price: "Unavailable" })),
+  ].sort((a, b) => a.from.localeCompare(b.from));
+  element("charging-details").hidden = !status?.adjustment_enabled;
+  for (const event of events.slice(0, 200)) {
+    const row = body.insertRow();
+    for (const value of [
+      event.label, new Date(event.from).toLocaleString(), new Date(event.to).toLocaleString(), event.price,
+    ]) row.insertCell().textContent = value;
+  }
+  text("charging-details-note", [
+    "Times are clipped to the selected window, in your browser timezone. Bonus rates cover settlement half-hours, not just charging minutes.",
+    status?.ev_coverage_pct != null ? `Recorded EV coverage: ${number(status.ev_coverage_pct)}% of the relevant tariff span.` : "",
+    events.length > 200 ? `Showing the first 200 of ${events.length} intervals; select a shorter range for detail.` : "",
+    "Assumes Prioritise Savings with no Max/Boost charging. These are estimates, not supplier-confirmed billing slots.",
+  ].filter(Boolean).join(" "));
+}
 function showTariff(status: TariffStatus): void {
   text("tariff-status", [
     status.tariff_name ? `${status.tariff_name} (${status.tariff_code})` : "No tariff pricing fetched.",
@@ -237,6 +260,7 @@ function fillSettings(): void {
   element<HTMLInputElement>("ha-token").value = "";
   element<HTMLInputElement>("ha-enabled").checked = config.home_assistant_enabled;
   element<HTMLInputElement>("tariff-enabled").checked = config.tariff_pricing_enabled;
+  element<HTMLInputElement>("ev-savings-from").value = config.ev_savings_from ?? "";
   element<HTMLButtonElement>("tariff-fetch").disabled = !config.has_api_key || !config.account_number || !config.active_device_id;
   element<HTMLInputElement>("ha-clear-token").checked = false;
   text("ha-token-status", config.has_home_assistant_token ? "Token saved. Leave blank to keep it." : "No token saved.");
@@ -288,14 +312,15 @@ function fillAutoRefresh(): void {
     ? "Graph auto-refresh is on. Window arrows keep historical dates fixed; presets return to the latest window."
     : "Graph auto-refresh is off. Live readings and meter polling continue unchanged; use Refresh graph to update this view.");
 }
-async function refresh(automatic = false): Promise<void> {
-  if (automatic && pending) return;
+async function refresh(automatic = false, attempt = 0): Promise<void> {
+  if (automatic && pending && attempt === 0) return;
   analysisDirty = false;
   recoveryRange = undefined; fillRecovery();
   if (!automatic) {
     for (const id of ["coverage", "energy", "peak", "above-6kw-time", "above-6kw-energy", "above-6kw-excess", "above-6kw-load-cost", "above-6kw-excess-cost"]) text(id, "--");
     text("pricing-note", "");
     element("thresholds").replaceChildren(); element("days").replaceChildren(); chart?.clear();
+    showCharging(); text("off-peak-status", "");
   }
   const selected = element<HTMLSelectElement>("history-device").value;
   if (!selected) { text("analysis-status", "Configure a meter to begin collecting history."); return; }
@@ -334,11 +359,17 @@ async function refresh(automatic = false): Promise<void> {
       peakError = error instanceof Error ? error.message : "Daily peaks could not be loaded.";
     }
     let rates: TariffStatus["rates"] = [];
+    let tariff: TariffStatus | undefined;
     let tariffNote = "";
     try {
-      const tariff = await api<TariffStatus>(`/api/tariff?${query}`, undefined, controller.signal);
+      tariff = await api<TariffStatus>(`/api/tariff?${query}`, undefined, controller.signal);
       rates = tariff.rates;
-      tariffNote = rates.length
+      tariffNote = tariff.adjustment_enabled
+        ? [
+          "Shading distinguishes scheduled off-peak and estimated EV bonus half-hours. Unresolved slots are not assumed to be peak-priced.",
+          ...tariff.warnings,
+        ].join(" ")
+        : rates.length
         ? "Off-peak shading uses cached household night-rate intervals only; missing tariff periods are not inferred."
         : "No cached household tariff intervals cover this meter/window. Fetch pricing in Settings to identify off-peak slots.";
     } catch (error) {
@@ -346,6 +377,15 @@ async function refresh(automatic = false): Promise<void> {
       tariffNote = `Off-peak indicators unavailable: ${error instanceof Error ? error.message : "Tariff request failed."}`;
     }
     if (current !== generation || controller.signal.aborted) return;
+    const revision = summary.pricing.pricing_revision;
+    if (tariff && (tariff.adjustment_enabled || revision) && (
+      summary.data_version !== history.data_version
+      || revision && (tariff.pricing_revision !== revision
+        || peaks?.daily_peaks.some(day => day.pricing.pricing_revision && day.pricing.pricing_revision !== revision))
+    )) {
+      if (attempt < 2) { await refresh(automatic, attempt + 1); return; }
+      throw new Error("Charging evidence changed during analysis. Refresh to load consistent costs and tariff shading.");
+    }
     if (start.getTime() >= Math.max(
       Date.now() - Math.min(storage.policy.raw_days, 31) * 86400000 - 60000,
       (storage.retention?.raw_before_us ?? 0) / 1000,
@@ -397,7 +437,8 @@ async function refresh(automatic = false): Promise<void> {
       ].filter(Boolean).join(" ");
     }
     text("off-peak-status", tariffNote);
-    chart?.update(history, rates);
+    showCharging(tariff);
+    chart?.update(history, rates, tariff?.charging, tariff?.unresolved);
     lastRefresh = Date.now();
   } catch (error) {
     if (!controller.signal.aborted && current === generation) {
@@ -544,8 +585,9 @@ async function renderDashboard(): Promise<void> {
     <div class="recovery-heading"><span id="recovery-spinner" class="recovery-spinner" aria-hidden="true" hidden></span><strong id="recovery-state"></strong></div>
     <p id="recovery-status" class="note"></p></div>
     <div id="chart" aria-label="Demand history chart"></div>
-    <div class="chart-indicators" aria-label="Visible chart indicators"><span id="off-peak-key" class="off-peak-key" hidden>Household off-peak slot</span><span id="threshold-key" class="threshold-key" hidden>6 kW threshold</span></div>
+    <div class="chart-indicators" aria-label="Visible chart indicators"><span id="off-peak-key" class="off-peak-key" hidden>Household off-peak slot</span><span id="bonus-key" class="bonus-key" hidden>Estimated EV bonus slot</span><span id="charging-key" class="charging-key" hidden>Observed EV charging</span><span id="unresolved-key" class="unresolved-key" hidden>Unresolved rate</span><span id="threshold-key" class="threshold-key" hidden>6 kW threshold</span></div>
     <p id="off-peak-status" class="note"></p>
+    <details id="charging-details" hidden><summary>EV charging and bonus-rate periods</summary><p id="charging-details-note" class="note"></p><div class="table-scroll"><table><thead><tr><th scope="col">Evidence / rate</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Household rate including VAT</th></tr></thead><tbody id="charging-periods"></tbody></table></div></details>
     <p class="note">Gaps are unknown, not zero. Incomplete bucket means are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
     </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th><th scope="col">Estimated cost while above</th><th scope="col">Estimated excess cost</th></tr></thead><tbody id="thresholds"></tbody></table></div>
@@ -561,10 +603,12 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="enabled" type="checkbox">Enable polling</label><label class="check"><input id="clear-key" type="checkbox">Clear saved API key (disable polling and tariff pricing first)</label></div></div>
     <h2 class="settings-subheading">Tariff pricing</h2>
     <label class="check"><input id="tariff-enabled" type="checkbox">Estimate costs using Octopus tariff pricing</label>
-    <p class="note">Save your Octopus account and meter first, then fetch their household import rates. Enable and save to refresh prices automatically every six hours, independently of meter polling. Prices include VAT; standing charges and EV-specific smart-charging adjustments are excluded. Both the whole load while above 6 kW and only the excess energy are priced at their applicable time-based rates.</p>
+    <p class="note">Save your Octopus account and meter first, then fetch their household import rates. Enable and save to refresh prices automatically every six hours, independently of meter polling. Prices include VAT and exclude standing charges. Both the whole load while above 6 kW and only the excess energy are priced at their applicable time-based rates.</p>
+    <label>Prioritise Savings start date (UK local date)<input id="ev-savings-from" type="date" min="1970-01-01" aria-describedby="ev-savings-help"></label>
+    <p id="ev-savings-help" class="note">Optional: entering a date confirms all Ohme charging from that date uses Intelligent Octopus Go Prioritise Savings, with no Max/Boost charging. Recorded positive charger power then earns an estimated whole-half-hour household off-peak rate, in both analysis modes. Leave blank to use published schedules only. Clear this assumption if charging policy or charger changes. Missing EV history leaves daytime costs unavailable where eligibility is unknown. Fetch pricing again after upgrading to cache dated daytime and night prices. Estimates are not supplier-confirmed billing or battery savings.</p>
     <button id="tariff-fetch" class="secondary" type="button">Fetch Octopus pricing</button>
     <p id="tariff-status" role="status">Loading tariff pricing...</p>
-    <div class="table-scroll"><table><caption>Household rates covering the next 24 hours (browser local times)</caption><thead><tr><th scope="col">Band</th><th scope="col">Unit rate including VAT</th><th scope="col">From</th><th scope="col">To</th></tr></thead><tbody id="tariff-rates"></tbody></table></div>
+    <div class="table-scroll"><table><caption>Known household rates in the next 24 hours (browser local times; future bonus slots are not guaranteed)</caption><thead><tr><th scope="col">Band</th><th scope="col">Unit rate including VAT</th><th scope="col">From</th><th scope="col">To</th></tr></thead><tbody id="tariff-rates"></tbody></table></div>
     <h2 class="settings-subheading">Ohme via Home Assistant</h2><div class="settings-grid">
     <label><span id="ha-url-label">Home Assistant URL</span><input id="ha-url" aria-labelledby="ha-url-label" aria-describedby="ha-url-help" type="url" maxlength="512" placeholder="http://homeassistant.local:8123"><small id="ha-url-help">Use an address reachable from this app's container. HTTPS is recommended; HTTP sends the token unencrypted. Redirects are not followed.</small></label>
     <label><span id="ha-entity-label">Ohme power entity</span><input id="ha-entity" aria-labelledby="ha-entity-label" aria-describedby="ha-entity-help" maxlength="255" placeholder="sensor.ohme_home_pro_power"><small id="ha-entity-help">Power sensor in W or kW, recorded in Home Assistant history.</small></label>
@@ -578,6 +622,9 @@ async function renderDashboard(): Promise<void> {
   window.onhashchange = route; route();
   chart = new DemandChart(element("chart"), visible => {
     element("off-peak-key").hidden = !visible.offPeak;
+    element("bonus-key").hidden = !visible.bonus;
+    element("charging-key").hidden = !visible.charging;
+    element("unresolved-key").hidden = !visible.unresolved;
     element("threshold-key").hidden = !visible.threshold;
   });
   if (authenticationRequired) {
@@ -659,6 +706,7 @@ async function renderDashboard(): Promise<void> {
       home_assistant_entity: element<HTMLInputElement>("ha-entity").value.trim() || null,
       home_assistant_enabled: element<HTMLInputElement>("ha-enabled").checked,
       tariff_pricing_enabled: element<HTMLInputElement>("tariff-enabled").checked,
+      ev_savings_from: element<HTMLInputElement>("ev-savings-from").value || null,
     };
     if (element<HTMLInputElement>("clear-key").checked) data.api_key = null;
     const homeToken = element<HTMLInputElement>("ha-token").value;

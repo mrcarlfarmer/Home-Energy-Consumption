@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import aiosqlite
 
+from app.analytics.effective_rates import HOUSEHOLD_WARNING, effective_rates
 from app.analytics.intervals import Metrics, integrate, integrate_without_ev, supported_segments
 from app.analytics.pricing import PricedThreshold
 from app.db.store import Store, one
@@ -421,7 +422,11 @@ class Analytics:
         if not total.observed_us:
             result["warning"] = "No observed energy is available to price"
             return result
-        rates = await self.store.tariff_rows(conn, snapshot["source"], start, end)
+        resolved = await effective_rates(self.store, conn, config, device, start, end, snapshot)
+        rates = resolved.rates
+        result["pricing_revision"] = resolved.revision
+        if resolved.adjustment_enabled:
+            result["warning"] = HOUSEHOLD_WARNING + ". " + " ".join(resolved.warnings)
         cost = PricedThreshold()
         if source is not None:
             for left in range(start, end, DAY_US):
@@ -465,7 +470,8 @@ class Analytics:
         if not complete:
             result["warning"] = (
                 "Costs unavailable: some observed above-threshold energy lacks applicable "
-                "rates or sufficiently detailed retained readings. " + PRICING_WARNING
+                "rates, EV eligibility evidence or sufficiently detailed retained readings. "
+                + result["warning"]
             )
         return result
 

@@ -55,8 +55,9 @@ spring/autumn clock changes retain their actual duration. Other schedules and
 payment-method-specific feeds are explicitly unsupported rather than inferred.
 EV-device-specific prices are not applied to household load.
 
-These are household-rate estimates including VAT, excluding standing charges,
-EV-specific smart-charging adjustments and account-specific discounts. Grid-only
+These are household-rate estimates including VAT, excluding standing charges
+and account-specific discounts. Smart-charging adjustments are excluded unless
+the explicit Prioritise Savings assumption below is enabled. Grid-only
 estimates may therefore differ from the actual billed price of smart EV charging.
 Exceeding 6 kW does not itself incur another charge. Neither estimate promises
 battery savings: losses, capacity, charging costs and dispatch are not modelled.
@@ -73,6 +74,65 @@ retained raw readings; otherwise the cost is unsupported because the aggregate
 cannot identify when its above-threshold energy occurred. The rolling tariff
 cache covers at most 31 days back (bounded by raw retention) and two days ahead.
 It does not promise prices for the full ten-year archive.
+
+### Intelligent Octopus Go bonus half-hours
+
+The optional `ev_savings_from` UK-local date confirms that every recorded Ohme
+charge from that date uses **Prioritise Savings**, with no Max/Boost or
+allowance-exhausted charging. The setting is deliberately opt-in, not inferred
+from power shape. It applies only to dated Intelligent (`INTELLI-` product)
+agreements with supported API household day/night schedules. It is not a general
+rule for Economy 7 or other tariffs.
+
+Any positive recorded EV power within an eligible settlement half-hour awards
+that half-hour an **estimated** household bonus rate. A ten-minute charge at
+18:07-18:17 therefore awards 18:00-18:30. This does not claim that thirty minutes
+of the six-hour allowance were used: the app relies on Prioritise Savings to
+enforce that allowance and does not independently reconstruct it. It cannot
+prove the charger mode or supplier eligibility from power alone. Standby and
+preconditioning must not be mistaken for qualifying charging when configuring
+this assumption.
+
+The shared resolver reads the entire UTC-aligned half-hour even for a shorter
+query. A charge at 18:17 can therefore determine the rate for a view ending at
+18:05. Repeated local half-hours during autumn DST remain distinct UTC slots.
+The activation date is interpreted in Europe/London; before it, published
+household schedules remain unchanged. Actual dated night prices are cached
+separately from expanded household schedules, so daytime-only queries do not
+substitute the day price or today's night price for a missing historic price.
+Rate/agreement boundaries inside a slot retain their exact prices and dates.
+
+One supported positive interval is sufficient to award an estimated bonus;
+unknown minutes elsewhere in that half-hour do not revoke that evidence.
+Conversely, no observed charge is not proof of no charging: complete valid EV
+coverage of the half-hour is required to retain its ordinary daytime price.
+Unknown/unavailable history, expired history and unfinished/future slots leave
+the affected effective rate unresolved. Missing dated night prices also leave
+an inferred bonus unpriced. Both threshold cost totals remain null when any
+observed above-threshold energy intersects an unresolved rate; observed periods
+without exceedance can still cost zero. Telemetry and EV coverage stay separate
+from above-threshold price coverage.
+
+Effective rates are independent of EV exclusion. Removing EV power never removes
+the earned household bonus. Both cost measures use the rate applicable to the
+actual supported demand segment; no change is made to energy, peaks, duration
+or excess arithmetic. For a fully observed half-hour of 8 kW grid import at
+8p/kWh, the 4 kWh while above 6 kW costs GBP 0.32 and the 1 kWh excess costs
+GBP 0.08. All costs remain sampled-data estimates, not supplier billing or
+predictions of savings from a home battery.
+
+The existing source-scoped EV history is authoritative for this inference and
+retains its Recorder/freshness limitations. Corrections change rates and costs
+without rewriting the published schedule. A base-price refresh cannot delete EV
+history. No extra collection, charger controls or mode/plan entities are needed
+for this explicitly assumed policy. Max/Boost, independent allowance accounting,
+mixed EV/household billing rates and supplier reconciliation are not supported
+by this mode; disable the assumption if they apply.
+
+The resolver uses retained EV intervals, not a charging-shaped household demand
+curve. Older archives without these intervals cannot reconstruct eligibility.
+Existing rules still require raw detail when a rate boundary splits an
+aggregate. No new promise of exact multi-year adjusted costs is made.
 
 ## EV exclusion
 
@@ -164,9 +224,15 @@ range changes and the EV toggle still request new analysis. Window arrows shift
 the exact elapsed duration and pin the resulting dates; presets follow the latest
 window again. They do not alter any stored measurement.
 
-Off-peak shading comes only from applicable cached `ECO7_NIGHT` household rate
-intervals, clipped to the visible time scale, including during chart zoom.
-No schedule is inferred outside the cache or for another meter. The dashed 6 kW
+Off-peak shading comes from applicable cached `ECO7_NIGHT` household rate
+intervals and, when opted in, separately styled `EV_BONUS` intervals from the
+same effective-rate resolver used for costs. Observed charging and unresolved
+rates have distinct strips and a timestamp/price table. All indicators clip to
+the visible time scale, including during chart zoom. Bonus rates remain present
+in both EV bases. No schedule is inferred outside the cache or for another meter.
+Pricing revisions incorporate configuration, meter/EV history and cached prices;
+the browser retries concurrent revisions rather than mixing costs and shading.
+The dashed 6 kW
 reference is drawn only within the visible power scale; it does not force the
 vertical axis to include 6 kW or change sampled values.
 

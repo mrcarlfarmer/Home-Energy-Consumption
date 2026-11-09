@@ -38,6 +38,13 @@ nonempty string replaces it; null clears it only with EV collection disabled.
 the token itself. Changing URL, entity or meter selects a separate EV history
 identity; token rotation does not discard that history.
 
+Optional `ev_savings_from` is a validated `YYYY-MM-DD` date or null (default).
+Setting it confirms all Ohme charging from that Europe/London date uses
+Intelligent Octopus Go Prioritise Savings, never Max/Boost or charging beyond
+the allowance. It requires a configured power URL/entity and meter. Null disables
+bonus inference. Account/meter or EV URL/entity changes clear it unless it is
+explicitly supplied again in the update. It does not enable collection or pricing.
+
 The Home Assistant test returns `power_w`, `reported_at`, `fresh`,
 `history_available` and `warnings`. It shares the local 45-second connectivity
 test cooldown. Only read-only requests are sent to the configured host, redirects
@@ -92,8 +99,26 @@ current tariff name/code/schedule, household rate intervals covering the next
 Optional paired `from`/`to` parameters request cached intervals overlapping a
 historical graph range instead (at most 3653 days). Optional `device_id` prevents
 the active tariff from being applied to another meter; a mismatch has no rates.
-These reads do not fetch upstream data or enable pricing. The graph shades only
-returned household `ECO7_NIGHT` intervals, never inferring uncached off-peak times.
+These reads do not fetch upstream data or enable pricing. The graph shades
+returned household `ECO7_NIGHT` and separately styled estimated `EV_BONUS`
+intervals, never inferring uncached prices.
+
+When `ev_savings_from` is set, the shared effective-rate resolver overlays whole
+settlement half-hours earned by recorded positive charger power, under that
+explicit assumption. Complete known-zero EV coverage retains an ordinary daytime
+rate. Unknown daytime eligibility is omitted from `rates`, never silently
+represented by the published day price. Other tariffs and dates before activation
+keep their published schedules.
+
+Additional response fields are `adjustment_enabled`, `pricing_revision`,
+`ev_coverage_pct` (nullable valid-EV-duration percentage over the relevant tariff
+span), `charging` and `unresolved`. The last two are arrays of RFC3339 `from`/`to`
+intervals clipped to the query. `charging` contains actual observed events;
+`EV_BONUS` rate intervals contain their awarded household periods. A charge
+outside the query can establish its rate because the full settlement half-hour
+is examined. `unresolved` includes missing EV evidence and inferred bonuses
+without dated night prices. Neither future plans nor a known-zero partial slot
+guarantee the eventual peak price. Warnings explain assumptions and missing data.
 
 `POST /api/tariff/refresh` accepts `{"expected_revision": N}` and uses only saved
 Octopus credentials, account and meter. Fetching does not enable pricing or meter
@@ -106,7 +131,9 @@ payment-method-specific feeds, missing rates and upstream errors.
 
 Enabled pricing refreshes every six hours independently of meter collection.
 It caches dated household rates over `min(raw_retention_days,31)` days back and
-two days ahead. Historical agreements are respected. Cache replacement is atomic
+two days ahead, including underlying dated night prices for bonus overlays.
+Fetch again after upgrading an older cache to obtain these underlying prices.
+Historical agreements are respected. Cache replacement is atomic
 and revision-fenced; failed refreshes preserve the previous cache for intervals
 it actually covers. Account/meter changes invalidate it; key rotation does not.
 
@@ -178,13 +205,18 @@ first independently of its selected duration.
 
 The summary also contains `pricing`: `enabled`, `available`,
 `energy_when_above_gbp`, `excess_energy_gbp`, `price_coverage_pct`,
-`priced_seconds_above`, `fetched_at` and `warning`. Monetary values are GBP,
+`priced_seconds_above`, `fetched_at`, `warning` and nullable `pricing_revision`. Monetary values are GBP,
 using household import rates including VAT and the selected grid/EV-excluded
 basis. Both are null unless every observed above-threshold interval is priced.
 No observed duration also yields null. Observed periods without exceedance can
 legitimately cost zero. Price coverage is above-threshold duration coverage, not
-overall meter/EV coverage. Standing charges, EV-specific billing adjustments and
-account-specific discounts are excluded; exceeding 6 kW is not itself a penalty.
+overall meter/EV coverage. Unknown bonus eligibility counts as missing applicable
+pricing, not an assumed peak rate. `pricing_revision` combines the configuration
+revision, meter/EV data version and tariff fetch timestamp; where present it
+matches `/api/tariff` for the same snapshot. The browser retries mismatched
+cost/history/indicator revisions. Standing charges and account-specific discounts
+are excluded; supplier-specific EV billing adjustments are not independently
+verified. Exceeding 6 kW is not itself a penalty.
 
 Each `/api/analytics/daily-peaks` row's `pricing` has the same fields and
 availability rules as the summary estimate, calculated independently over that

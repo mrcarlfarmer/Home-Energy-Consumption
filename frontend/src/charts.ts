@@ -2,7 +2,9 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { History, TariffStatus } from "./api";
 
-export interface ChartIndicators { offPeak: boolean; threshold: boolean }
+export interface ChartIndicators {
+  offPeak: boolean; bonus: boolean; charging: boolean; unresolved: boolean; threshold: boolean;
+}
 
 export class DemandChart {
   private plot?: uPlot;
@@ -16,27 +18,40 @@ export class DemandChart {
     }));
     this.observer.observe(target);
   }
-  update(history: History, rates: TariffStatus["rates"]): void {
+  update(
+    history: History, rates: TariffStatus["rates"],
+    charging: TariffStatus["charging"] = [], unresolved: TariffStatus["unresolved"] = [],
+  ): void {
     this.plot?.destroy();
     const s = history.series;
     // Incomplete bucket means are not drawn as a fully supported continuous curve.
     const means = s.mean_import_w.map((value, i) => s.coverage_pct[i] === 100 ? value : null);
     const theme = getComputedStyle(this.target);
     const color = (token: string): string => theme.getPropertyValue(token).trim();
-    const offPeak = rates.filter(rate => rate.band === "ECO7_NIGHT").map(rate => [
-      new Date(rate.from).getTime() / 1000, new Date(rate.to).getTime() / 1000,
+    const seconds = (intervals: { from: string; to: string }[]): number[][] => intervals.map(interval => [
+      new Date(interval.from).getTime() / 1000, new Date(interval.to).getTime() / 1000,
     ]);
-    const visibleBands = (plot: uPlot): number[][] => offPeak.map(([from, to]) => [
+    const offPeak = seconds(rates.filter(rate => rate.band === "ECO7_NIGHT"));
+    const bonus = seconds(rates.filter(rate => rate.band === "EV_BONUS"));
+    const chargingBands = seconds(charging);
+    const unknownBands = seconds(unresolved);
+    const visibleBands = (plot: uPlot, bands = offPeak): number[][] => bands.map(([from, to]) => [
       Math.max(from, plot.scales.x.min!), Math.min(to, plot.scales.x.max!),
     ]).filter(([from, to]) => from < to);
     const shadeOffPeak = (plot: uPlot): void => {
       const { ctx, bbox } = plot;
       ctx.save();
       ctx.beginPath(); ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height); ctx.clip();
-      ctx.fillStyle = color("--chart-off-peak");
-      for (const [from, to] of visibleBands(plot)) {
-        const left = plot.valToPos(from, "x", true);
-        ctx.fillRect(left, bbox.top, plot.valToPos(to, "x", true) - left, bbox.height);
+      for (const [bands, token, strip] of [
+        [offPeak, "--chart-off-peak", false], [bonus, "--chart-bonus", false],
+        [unknownBands, "--chart-unknown", true], [chargingBands, "--chart-charging", true],
+      ] as const) {
+        ctx.fillStyle = color(token);
+        for (const [from, to] of visibleBands(plot, bands)) {
+          const left = plot.valToPos(from, "x", true);
+          const height = strip ? Math.max(4, bbox.height * 0.025) : bbox.height;
+          ctx.fillRect(left, bbox.top + bbox.height - height, plot.valToPos(to, "x", true) - left, height);
+        }
       }
       ctx.restore();
     };
@@ -44,7 +59,11 @@ export class DemandChart {
       const { ctx, bbox } = plot;
       const threshold = plot.scales.y.min != null && plot.scales.y.max != null
         && plot.scales.y.min <= 6000 && plot.scales.y.max >= 6000;
-      this.indicators({ offPeak: visibleBands(plot).length > 0, threshold });
+      this.indicators({
+        offPeak: visibleBands(plot).length > 0, bonus: visibleBands(plot, bonus).length > 0,
+        charging: visibleBands(plot, chargingBands).length > 0,
+        unresolved: visibleBands(plot, unknownBands).length > 0, threshold,
+      });
       if (!threshold) return;
       const y = plot.valToPos(6000, "y", true);
       const ratio = plot.ctx.canvas.width / plot.width;
@@ -84,7 +103,7 @@ export class DemandChart {
   }
   clear(): void {
     this.plot?.destroy(); this.plot = undefined;
-    this.indicators({ offPeak: false, threshold: false });
+    this.indicators({ offPeak: false, bonus: false, charging: false, unresolved: false, threshold: false });
   }
   destroy(): void { this.observer.disconnect(); this.plot?.destroy(); }
 }
