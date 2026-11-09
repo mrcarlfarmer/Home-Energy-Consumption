@@ -345,7 +345,9 @@ async def test_source_change_and_disabling_assumption(store: Store) -> None:
     assert (await resolve(store)).rates == []
 
 
-async def test_overnight_charging_is_visible_without_requiring_it_for_home_rate(store: Store) -> None:
+async def test_overnight_charging_is_visible_without_requiring_it_for_home_rate(
+    store: Store,
+) -> None:
     config = await configure(store)
     start = timestamp_us("2026-10-27T02:00:00Z")
     await cache(store, config, start, start + HALF_HOUR, band="ECO7_NIGHT")
