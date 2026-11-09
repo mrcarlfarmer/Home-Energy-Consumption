@@ -33,7 +33,7 @@ setting `ENERGY_DATA_DIRECTORY` for Compose.
 1. Install Docker Engine and the Compose plugin on a **64-bit** OS.
 2. Follow [deployment](docs/deployment.md) to create an administrator password file and a locally trusted HTTPS certificate. Never put real secrets in Git.
 3. Copy `.env.example` to `.env`, set your Pi's LAN address, certificate paths, trusted hostnames and HTTPS origins.
-4. Run `docker compose up -d --build`.
+4. Set the build version from Git and run `docker compose up -d --build`, following the [deployment commands](docs/deployment.md).
 5. Open your configured HTTPS address on port 8443, sign in and enter your Octopus API key/account. Test connectivity to discover the electricity meter, select it, then save with polling enabled.
 
 The device ID is the **electricity smart meter EUI-64**, not the Home Mini serial number. Polling defaults to 45 seconds. No port forwarding or external dashboard service is required.
@@ -212,6 +212,17 @@ before upgrading; rolling back to an older application requires that backup.
 - [Original detailed implementation plan](docs/implementation-plan.md)
 
 ## Development
+
+The sign-in page and dashboard footer display **Build N (revision)**. `N` is the
+number of commits reachable from the built revision, so every new commit advances
+the number without editing a version file. Rebuilding the same commit keeps its
+number; branches can share a number, so the 12-character Git revision identifies
+the exact source. Builds from modified local checkouts show **uncommitted changes**.
+The number advances when changes are committed, not on each edit or browser refresh.
+Frontend builds derive this automatically from full Git history (use
+`git fetch --unshallow` for a shallow clone). Published Docker images bake in the
+same identity through `APP_BUILD_VERSION`; redeploy the new image to see it in the UI.
+This build identifier is separate from the package/API semantic version.
 
 Python 3.12+ and Node 22+ are required. On Windows PowerShell:
 

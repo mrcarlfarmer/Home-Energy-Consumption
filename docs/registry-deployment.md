@@ -19,6 +19,12 @@ Pull requests and other branches never publish. You can also run `Verify` manual
 
 The publishing job uses GitHub's automatically provided `${{ secrets.GITHUB_TOKEN }}` with job-scoped `packages: write`. No personal publishing token or manually created repository secret is required. Source/revision labels link the package to its repository; builds include provenance and SBOM attestations. The successful run's **Summary** lists the commit tag and the exact multi-architecture manifest digest. Digest references are preferable because a tag can be overwritten by a rerun.
 
+The workflow checks out full Git history and passes the commit count and
+12-character revision to Docker as `APP_BUILD_VERSION`. The sign-in page and
+dashboard footer display **Build N (revision)** from that image. Each new commit
+advances the count; rerunning the same commit retains its version. After
+redeploying, check this identifier to confirm which source version is running.
+
 ## Secret boundaries
 
 | Credential | Where it belongs |

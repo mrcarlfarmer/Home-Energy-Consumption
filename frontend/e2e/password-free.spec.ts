@@ -19,6 +19,9 @@ test("Carbon Aurora theme and navigation remain usable across screen sizes", asy
   expect(theme.font).toContain("monospace");
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
+    const version = page.getByLabel("Application version", { exact: true });
+    await expect(version).toBeVisible();
+    await expect(version).toHaveText(/^Build \d+ \([a-f0-9]{12}(?:, uncommitted changes)?\)$/);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const nav = page.getByRole("navigation", { name: "Dashboard navigation" });
     await nav.getByRole("link", { name: "Settings", exact: true }).click();
@@ -43,6 +46,9 @@ test("opens directly without cookies, keeps settings and streams without login",
   await expect(page.locator("#demand")).toHaveText("4");
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
   await expect(page.locator(".access-warning")).toContainText("anyone who can reach");
+  await expect(page.getByLabel("Application version", { exact: true })).toBeVisible();
+  await expect(page.locator(".transport-warning")).toHaveCount(0);
+  await expect(page.getByText("HTTP connection:", { exact: false })).toHaveCount(0);
   await expect(page.getByLabel("Dashboard password")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
   expect(await page.content()).not.toContain("fixture-only-key");

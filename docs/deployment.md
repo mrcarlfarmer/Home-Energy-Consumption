@@ -66,11 +66,18 @@ Copy `.env.example` to `.env` and set:
 The first allowed hostname must appear in the certificate SANs. The health probe connects over loopback while validating that hostname against the mounted certificate; it never disables certificate validation. It explicitly trusts the mounted certificate as a partial-chain anchor, so a locally issued leaf works without shipping the CA's private key.
 
 ```sh
+export APP_BUILD_VERSION="$(git rev-list --count HEAD)-$(git rev-parse --short=12 HEAD)"
 docker compose config --quiet
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail 50 energy
 ```
+
+Calculate `APP_BUILD_VERSION` again before every source build, using a checkout
+with full Git history. Append `-dirty` when building uncommitted changes.
+In PowerShell use
+`$env:APP_BUILD_VERSION = "$(git rev-list --count HEAD)-$(git rev-parse --short=12 HEAD)"`.
+The version is baked into the frontend, not read from the runtime environment.
 
 The bounded bind-mounted data filesystem must have private UID/GID 10001 ownership
 before starting; the storage preparation helper provisions this.
@@ -99,7 +106,9 @@ This limit is a guardrail, not a native Pi benchmark. See validation results bef
 Buildx can build both targets in CI. To load a single target into a classic local Docker image store:
 
 ```sh
-docker buildx build --platform linux/arm64 --load -t home-energy-monitor:arm64 .
+docker buildx build --platform linux/arm64 --load \
+  --build-arg APP_BUILD_VERSION="$(git rev-list --count HEAD)-$(git rev-parse --short=12 HEAD)" \
+  -t home-energy-monitor:arm64 .
 ```
 
 For an AMD64 host, ARM64 execution/building requires native remote hardware or a QEMU-capable builder. Do not interpret emulated performance as real Pi performance.
