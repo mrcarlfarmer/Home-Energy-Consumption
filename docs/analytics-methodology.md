@@ -155,16 +155,39 @@ charger was online throughout every
 unchanged state: unreported outages can leave stale values. This limitation is
 explicit in the adjusted responses.
 
-Intersect supported meter segments with valid EV intervals, split at every EV
-change, and use `max(0, signed_grid_demand - EV_power)` before applying the same
-energy and strict-threshold arithmetic. Grid gap/null rules remain unchanged.
+Ohme polls every thirty seconds, whereas meter readings and their bounded holds
+use separate timestamps. Subtracting these sources across a charging start/stop
+can leave a brief full-EV-power residual or an artificially low household value.
+For exclusion only, mark the sixty seconds before and after each contiguous,
+known zero-to-positive or positive-to-zero EV change as unknown. This allows one
+Ohme polling period plus the maximum thirty-second meter hold in either direction;
+it is an uncertainty allowance, not a measured clock correction or a guarantee
+against longer reporting delays. Overlapping guards are combined. Unavailable
+states, gaps and unchanged values do not invent charging transitions. Ordinary
+positive power variations are still recorded-state estimates.
+
+The guard is applied before all adjusted integration and peak calculations, not
+as a chart filter or a rule discarding values above 6 kW. Any genuine household
+event inside a guard is also unavailable; events outside it retain the existing
+arithmetic. Guarded time contributes no adjusted energy, threshold duration or
+cost, and reduces joint coverage. Trailing fifteen-minute values crossing a guard
+are unavailable until their full window is supported again. Fetch neighbouring
+EV evidence outside each query/day/cache boundary before deriving the guard, so
+changing zoom, resolution or calendar splits cannot change support. Stored EV
+history and whole-meter analytics remain unchanged. The bonus-rate resolver still
+uses original charging evidence, including charging inside exclusion guards.
+
+Intersect supported meter segments with the remaining valid EV intervals, split
+at every EV change, and use `max(0, signed_grid_demand - EV_power)` before applying
+the same energy and strict-threshold arithmetic. Grid gap/null rules remain unchanged.
 Coverage and time-above percentages use only jointly usable duration. A known
 zero EV reading supports subtraction; missing EV data does not.
 
 Derived peaks include usable meter readings and supported intersection
-boundaries, so an EV power change within a meter segment cannot hide an adjusted
-peak. Daily summaries, chart buckets and the full-coverage trailing fifteen-minute
-curve share this calculation. The live card remains whole-meter grid demand.
+boundaries outside transition guards, so a supported EV power change within a
+meter segment cannot hide an adjusted peak. Daily summaries, chart buckets and
+the full-coverage trailing fifteen-minute curve share this calculation. The live
+card remains whole-meter grid demand.
 This is **non-EV grid import**, not total household load when solar/batteries are
 present.
 

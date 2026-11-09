@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 import pytest
-from app.analytics.intervals import integrate_without_ev
+from app.analytics.intervals import ev_exclusion_intervals, integrate_without_ev
 from app.analytics.service import Analytics
 from app.db.store import Store
 from app.ev_collector import EVCollector
@@ -380,6 +380,146 @@ def test_ev_subtraction_clipping_thresholds_and_gaps() -> None:
     assert missing.observed_us == 0 and missing.peak_mw is None
 
 
+def test_ev_transition_guards_merge_without_changing_recorded_evidence() -> None:
+    second = 1_000_000
+    intervals = [
+        EVInterval(a * second, b * second, power_mw)
+        for a, b, power_mw in [
+            (0, 300, 0),
+            (300, 340, 7_000_000),
+            (340, 360, 0),
+            (360, 600, 7_000_000),
+            (600, 900, 0),
+        ]
+    ]
+    original = list(intervals)
+    adjusted = ev_exclusion_intervals(intervals)
+    assert intervals == original
+    assert adjusted == [
+        EVInterval(a * second, b * second, power_mw)
+        for a, b, power_mw in [
+            (0, 240, 0),
+            (240, 300, None),
+            (300, 340, None),
+            (340, 360, None),
+            (360, 420, None),
+            (420, 540, 7_000_000),
+            (540, 600, None),
+            (600, 660, None),
+            (660, 900, 0),
+        ]
+    ]
+    assert ev_exclusion_intervals(adjusted) == adjusted
+
+
+@pytest.mark.parametrize(
+    "before,after,gap",
+    [(0, 0, 0), (7_000_000, 6_800_000, 0), (0, None, 0), (None, 7_000_000, 0), (0, 7_000_000, 1)],
+)
+def test_ev_transition_guards_require_known_contiguous_start_stop(
+    before: int | None, after: int | None, gap: int
+) -> None:
+    intervals = [
+        EVInterval(0, 100_000_000, before),
+        EVInterval(100_000_000 + gap, 200_000_000, after),
+    ]
+    assert ev_exclusion_intervals(intervals) == intervals
+
+
+@pytest.mark.parametrize("lag", [-30, 30])
+async def test_asynchronous_ev_edges_are_unknown_but_household_peaks_remain(
+    store: Store, lag: int
+) -> None:
+    config = await configure(store)
+    second = 1_000_000
+    start = timestamp_us("2026-11-07T23:55:00Z")
+    end = start + 2100 * second
+    on, off = start + (300 + lag) * second, start + (900 + lag) * second
+    intervals = [
+        EVInterval(start, on, 0),
+        EVInterval(on, off, 7_000_000),
+        EVInterval(off, end, 0),
+    ]
+    rows = [
+        (
+            start + t * second,
+            (300 + (7000 if 300 <= t < 900 else 0) + (7400 if 600 <= t < 610 else 0)) * 1000,
+        )
+        for t in range(0, 2101, 10)
+    ]
+    # Unaligned subtraction counts a false 30-second exceedance as well as the real one.
+    assert integrate_without_ev(rows, intervals, start, end).above[0] == 40 * second
+    await store.ingest(
+        DEVICE,
+        [
+            Reading.from_kraken({"readAt": iso(at), "demand": power_mw / 1000}, end)
+            for at, power_mw in rows
+        ],
+        config["revision"],
+    )
+    for left in range(start, end, 900 * second):
+        right = min(end, left + 900 * second)
+        await store.save_ev_history(
+            config,
+            left,
+            right,
+            [
+                EVInterval(max(left, row.start), min(right, row.end), row.power_mw)
+                for row in intervals
+                if row.start < right and row.end > left
+            ],
+        )
+    api = Analytics(store)
+    adjusted = await api.summary(start, end, "UTC", exclude_ev=True)
+    assert adjusted["observed_seconds"] == 1860
+    assert adjusted["import_energy_kwh"] == pytest.approx(632_000 / 3_600_000)
+    assert adjusted["thresholds"][0]["seconds_above"] == 10
+    assert adjusted["thresholds"][0]["excess_energy_kwh"] == pytest.approx(17_000 / 3_600_000)
+    assert adjusted["sampled_peak_w"] == 7700
+    assert adjusted["sampled_peak_at"] == iso(start + 600 * second)
+    assert any("60 seconds before and after" in warning for warning in adjusted["warnings"])
+    for interval in ("1m", "5m", "15m", "1h"):
+        history = await api.history(start, end, interval, 1500, exclude_ev=True)
+        assert sum(history["series"]["observed_seconds"]) == adjusted["observed_seconds"]
+        assert max(p for p in history["series"]["sampled_peak_w"] if p is not None) == 7700
+        assert history["series"]["rolling_15m_w"][-1] == 300
+        if interval == "1m":
+            assert None in history["series"]["rolling_15m_w"]
+            assert None in history["series"]["sampled_peak_w"]
+
+    daily = (await api.daily_peaks(end, "UTC", exclude_ev=True))["daily_peaks"]
+    assert sum(day["observed_seconds"] for day in daily) == adjusted["observed_seconds"]
+    assert max(day["sampled_peak_w"] for day in daily if day["sampled_peak_w"] is not None) == 7700
+    for transition in (on, off):
+        for a, b in (
+            (transition - 30 * second, transition - 10 * second),
+            (transition + 30 * second, transition + 50 * second),
+        ):
+            zoom = await api.summary(a, b, "UTC", exclude_ev=True)
+            chart = await api.history(a, b, "1m", 1500, exclude_ev=True)
+            assert zoom["observed_seconds"] == 0
+            assert zoom["import_energy_kwh"] is None
+            assert zoom["sampled_peak_w"] is None
+            assert all(value is None for value in chart["series"]["sampled_peak_w"])
+            assert all(value is None for value in chart["series"]["mean_import_w"])
+    stable = await api.summary(on + 60 * second, on + 120 * second, "UTC", exclude_ev=True)
+    assert stable["coverage_pct"] == 100
+    assert stable["sampled_peak_w"] == 300
+    grid = await api.summary(start, end, "UTC")
+    assert grid["observed_seconds"] == 2100
+    assert grid["thresholds"][0]["seconds_above"] == 600
+    assert grid["sampled_peak_w"] == 14700
+    async with store.read() as conn:
+        assert (
+            sum(
+                row.end - row.start
+                for row in await store.ev_rows(conn, ev_source(config), start, end)
+                if row.power_mw is not None
+            )
+            == end - start
+        )
+
+
 async def test_storage_overlap_corrections_fencing_and_retention(store: Store) -> None:
     config = await configure(store)
     start = now_us() - 600_000_000
@@ -421,40 +561,40 @@ async def test_summary_history_and_grid_view_are_consistent(store: Store) -> Non
         DEVICE,
         [
             Reading.from_kraken(
-                {"readAt": iso(start + t * 1_000_000), "demand": 8000}, start + 60_000_000
+                {"readAt": iso(start + t * 1_000_000), "demand": 8000}, start + 600_000_000
             )
-            for t in range(0, 61, 10)
+            for t in range(0, 601, 10)
         ],
         config["revision"],
     )
     await store.save_ev_history(
         config,
         start,
-        start + 60_000_000,
+        start + 600_000_000,
         [
-            EVInterval(start, start + 20_000_000, 7_000_000),
-            EVInterval(start + 20_000_000, start + 40_000_000, 0),
-            EVInterval(start + 40_000_000, start + 60_000_000, None),
+            EVInterval(start, start + 200_000_000, 7_000_000),
+            EVInterval(start + 200_000_000, start + 400_000_000, 0),
+            EVInterval(start + 400_000_000, start + 600_000_000, None),
         ],
     )
     api = Analytics(store)
-    grid = await api.summary(start, start + 60_000_000, "UTC")
-    adjusted = await api.summary(start, start + 60_000_000, "UTC", exclude_ev=True)
-    history = await api.history(start, start + 60_000_000, "1m", 1500, exclude_ev=True)
+    grid = await api.summary(start, start + 600_000_000, "UTC")
+    adjusted = await api.summary(start, start + 600_000_000, "UTC", exclude_ev=True)
+    history = await api.history(start, start + 600_000_000, "15m", 1500, exclude_ev=True)
     assert len(grid["thresholds"]) == 1
     assert grid["thresholds"][0]["threshold_w"] == 6000
-    assert grid["thresholds"][0]["seconds_above"] == 60
+    assert grid["thresholds"][0]["seconds_above"] == 600
     assert grid["coverage_pct"] == 100
-    assert adjusted["coverage_pct"] == pytest.approx(100 * 40 / 60)
-    assert adjusted["thresholds"][0]["seconds_above"] == 20
-    assert adjusted["import_energy_kwh"] == pytest.approx(0.05)
-    assert adjusted["daily_peaks"][0]["observed_seconds"] == 40
+    assert adjusted["coverage_pct"] == pytest.approx(100 * 280 / 600)
+    assert adjusted["thresholds"][0]["seconds_above"] == 140
+    assert adjusted["import_energy_kwh"] == pytest.approx(0.35)
+    assert adjusted["daily_peaks"][0]["observed_seconds"] == 280
     assert history["series"]["mean_import_w"] == [4500]
     assert history["series"]["coverage_pct"] == [adjusted["coverage_pct"]]
     assert history["series"]["sampled_peak_w"] == [adjusted["sampled_peak_w"]]
     assert history["method"] == adjusted["method"]
     await store.rebuild()
-    assert (await api.summary(start, start + 60_000_000, "UTC")) == grid
+    assert (await api.summary(start, start + 600_000_000, "UTC")) == grid
     with pytest.raises(ValueError, match="retained raw"):
         await api.summary(start, start + 31 * DAY_US, "UTC", exclude_ev=True)
     async with store.write() as conn:

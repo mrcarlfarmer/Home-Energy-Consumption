@@ -49,9 +49,9 @@ test("tariff settings fetch prices and estimate both grid and EV-excluded thresh
   await expect(page.locator("#days-status")).toContainText("Costs cover observed energy only");
   const evDailyResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/daily-peaks");
   await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).check();
-  await expect(page.locator("#above-6kw-load-cost")).toHaveText("£1.20");
-  await expect(page.locator("#above-6kw-excess-cost")).toHaveText("£0.30");
-  await checkDaily(await (await evDailyResponse).json(), 0.3);
+  await expect(page.locator("#above-6kw-load-cost")).toHaveText("£1.16");
+  await expect(page.locator("#above-6kw-excess-cost")).toHaveText("£0.29");
+  await checkDaily(await (await evDailyResponse).json(), 0.29);
   await page.route("**/api/analytics/summary?**", async route => {
     const response = await route.fetch();
     const summary = await response.json();

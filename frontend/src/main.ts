@@ -339,13 +339,13 @@ async function refresh(automatic = false, attempt = 0): Promise<void> {
     if (excludeEV) query.set("exclude_ev", "true");
     text("energy-label", excludeEV ? "Estimated non-EV import" : "Estimated import");
     text("peak-label", excludeEV ? "Derived non-EV peak" : "Sampled peak");
-    text("peak-hint", excludeEV ? "Estimated from aligned readings" : "Highest observed reading");
-    text("coverage-hint", excludeEV ? "Joint meter / Ohme coverage" : "Within the selected window");
+    text("peak-hint", excludeEV ? "Supported readings outside charging transitions" : "Highest observed reading");
+    text("coverage-hint", excludeEV ? "Joint meter / Ohme, minus transition gaps" : "Within the selected window");
     text("above-6kw-hint", excludeEV ? "Observed within the selected window, excluding EV" : "Observed within the selected window");
     text("inverter-window", excludeEV ? "EXCLUDING EV / SELECTED WINDOW" : "SELECTED WINDOW");
     text("days-label", excludeEV ? "Daily derived non-EV peaks" : "Daily sampled peaks");
     text("analysis-basis-note", excludeEV
-      ? "EV power is subtracted before calculating these estimates. Missing Ohme data is unknown, not zero. Live demand remains whole-meter grid import. EV exclusion requires retained raw history."
+      ? "EV power is subtracted before calculating these estimates. The minute before and after recorded charging starts/stops is unknown, reducing coverage rather than guessing household demand. Missing Ohme data is also unknown, not zero. Live demand remains whole-meter grid import. EV exclusion requires retained raw history."
       : "Analytics include all grid import, including EV charging. Turn on Exclude EV charging after configuring Home Assistant.");
     text("analysis-status", "Calculating observed demand...");
     const storage = await api<StorageStatus>(`/api/storage?device_id=${encodeURIComponent(selected)}`, undefined, controller.signal);
@@ -616,7 +616,7 @@ async function renderDashboard(): Promise<void> {
     <label><span id="ha-entity-label">Ohme power entity</span><input id="ha-entity" aria-labelledby="ha-entity-label" aria-describedby="ha-entity-help" maxlength="255" placeholder="sensor.ohme_home_pro_power"><small id="ha-entity-help">Power sensor in W or kW, recorded in Home Assistant history.</small></label>
     <label><span id="ha-token-label">Replace Home Assistant access token</span><input id="ha-token" aria-labelledby="ha-token-label" aria-describedby="ha-token-status" type="password" autocomplete="new-password" maxlength="4096"><small id="ha-token-status"></small></label>
     <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
-    <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
+    <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention, omitting the minute either side of recorded charging starts/stops; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
     </main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();

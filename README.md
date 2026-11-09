@@ -124,7 +124,12 @@ No charging controls or Home Assistant mutations are issued.
 
 EV exclusion is an estimate based on recorded power changes, not a household
 submeter. Missing/unavailable EV history is unknown, not zero. Unreported Home
-Assistant outages can leave stale recorded states. Adjusted analysis is limited
+Assistant outages can leave stale recorded states. Meter and Ohme updates can
+arrive at different times, so the minute before and after each recorded charging
+start/stop is also unknown. These periods are omitted from adjusted peaks,
+energy, threshold totals and costs, with reduced coverage shown rather than
+guessed household demand. Original charging evidence still determines bonus
+off-peak eligibility. Adjusted analysis is limited
 to the selected active meter's retained raw readings (normally 30 days); older
 grid-only aggregates cannot be subtracted accurately. Solar/batteries can still
 make non-EV grid import lower than actual household load.

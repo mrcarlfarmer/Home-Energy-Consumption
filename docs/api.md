@@ -167,16 +167,20 @@ omission selects the active meter. No cross-meter aggregation occurs.
 Both endpoints accept `exclude_ev=true` (default false). This subtracts the
 configured Ohme power history before energy/threshold calculations and uses
 joint meter/EV coverage. Missing EV data does not fall back to grid-only values.
+The sixty seconds before and after each recorded, known charging start/stop are
+also unsupported to allow for asynchronous meter/Ohme updates. Adjusted peaks,
+energy, threshold totals and costs omit these periods and coverage is reduced;
+whole-meter analytics and original bonus-rate eligibility evidence are unchanged.
 It is available only for the configured active meter, ranges no longer than raw
 retention, and boundaries not older than the raw retention watermark. Unsupported
 ranges return 422 with an explicit message. The unadjusted endpoint retains all
 existing archive behavior.
 
 Adjusted responses use `method.power_basis=nonnegative_grid_import_excluding_ev`
-and `integration=meter_previous_sample_hold_minus_recorded_ev_state_hold`.
+and `integration=meter_previous_sample_hold_minus_recorded_ev_state_hold_with_start_stop_gaps`.
 Daily metrics, chart means, derived peaks and trailing demand all use this basis.
 The unchanged live reading remains grid import. Responses warn about recorded-
-state estimation and unreported Home Assistant outages.
+state estimation, transition gaps and unreported Home Assistant outages.
 
 `GET /api/analytics/summary` additionally accepts `timezone` (default `Europe/London`). It returns observed/requested duration, coverage, estimated import kWh, sampled peak/time, local daily peaks and a single 6 kW threshold:
 
