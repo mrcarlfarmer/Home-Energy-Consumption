@@ -20,6 +20,8 @@ test("daily date links open real calendar analysis, all three views and preserve
   await expect(page.locator("#overview")).toBeHidden();
   await expect(page.locator("#day-date")).toHaveValue(date!);
   await expect(page.locator("#day-chart canvas").first()).toBeVisible();
+  await expect(page.locator("#day-chart .u-legend")).toContainText("Sampled peak (W)");
+  await expect(page.locator("#day-chart .u-legend")).not.toContainText("Observed mean");
   await expect(page.locator(".day-metrics")).toContainText(`${day.grid.sampled_peak_w! / 1000} kW`);
   await expect(page.locator(".day-notice").first()).toContainText("observed");
 
@@ -44,6 +46,7 @@ test("daily date links open real calendar analysis, all three views and preserve
   await expect(page.locator("#day-chart canvas").first()).toBeVisible();
   await expect(page.locator("#day-chart .u-legend")).toContainText("EV charging (W)");
   await expect(page.locator("#day-chart .u-legend")).toContainText("Grid peak reference (W)");
+  await expect(page.locator("#day-chart .u-legend")).not.toContainText("Observed mean");
   await page.getByRole("button", { name: "Peak window", exact: true }).click();
   await expect(page.locator("#from")).toHaveValue(from);
   await expect(page.locator("#to")).toHaveValue(to);
