@@ -12,6 +12,130 @@ from pydantic import SecretStr
 from test_analytics import readings
 
 
+async def test_ev_chart_means_are_weighted_and_independent_of_meter_basis(store: Store) -> None:
+    start = timestamp_us("2026-01-05T08:00:00Z")
+    await store.ingest(DEVICE, readings(start, 180, 8000), 2)
+    await store.save_config(
+        ConfigUpdate(
+            expected_revision=2,
+            home_assistant_enabled=True,
+            home_assistant_url="http://ha.fixture",
+            home_assistant_entity="sensor.power",
+            home_assistant_token=SecretStr("fixture-token"),
+        )
+    )
+    await store.save_ev_history(
+        await store.config(),
+        start,
+        start + 300_000_000,
+        [
+            EVInterval(start, start + 15_000_000, 2000_000),
+            EVInterval(start + 15_000_000, start + 60_000_000, 6000_000),
+            EVInterval(start + 60_000_000, start + 120_000_000, 0),
+            EVInterval(start + 120_000_000, start + 150_000_000, 7000_000),
+            EVInterval(start + 150_000_000, start + 180_000_000, None),
+            EVInterval(start + 180_000_000, start + 240_000_000, None),
+            EVInterval(start + 240_000_000, start + 300_000_000, 3000_000),
+        ],
+    )
+    for exclude_ev in (False, True):
+        result = await Analytics(store).history(
+            start, start + 300_000_000, "1m", 1500, exclude_ev=exclude_ev
+        )
+        series = result["series"]
+        assert series["mean_ev_w"] == [5000, 0, 7000, None, 3000]
+        assert series["ev_coverage_pct"] == [100, 100, 50, 0, 100]
+        assert series["mean_import_w"][0] == (None if exclude_ev else 8000)
+        assert series["coverage_pct"][0] == (0 if exclude_ev else 100)
+        assert series["coverage_pct"][4] == 0
+        assert {len(values) for values in series.values()} == {5}
+
+    await store.rebuild(100)
+    async with store.write() as conn:
+        await conn.execute(
+            "INSERT INTO retention_state(device_id,raw_before_us) VALUES(?,?)",
+            (DEVICE, start + 300_000_000),
+        )
+    archived = await Analytics(store).history(start, start + 300_000_000, "5m", 1500)
+    assert archived["series"]["mean_ev_w"] == [None]
+    assert archived["series"]["ev_coverage_pct"] == [0]
+
+
+async def test_ev_chart_does_not_mix_sources_or_require_home_assistant(store: Store) -> None:
+    start = timestamp_us("2026-01-05T08:00:00Z")
+    result = await Analytics(store).history(start, start + 60_000_000, "1m", 1500)
+    assert result["series"]["mean_ev_w"] == [None]
+    assert result["series"]["ev_coverage_pct"] == [0]
+    await store.save_config(
+        ConfigUpdate(
+            expected_revision=2,
+            home_assistant_enabled=True,
+            home_assistant_url="http://ha.fixture",
+            home_assistant_entity="sensor.power",
+            home_assistant_token=SecretStr("fixture-token"),
+        )
+    )
+    await store.save_ev_history(
+        await store.config(),
+        start,
+        start + 60_000_000,
+        [EVInterval(start, start + 60_000_000, 7000_000)],
+    )
+    original = await Analytics(store).history(start, start + 60_000_000, "1m", 1500)
+    assert original["series"]["mean_ev_w"] == [7000]
+    await store.save_config(
+        ConfigUpdate(expected_revision=3, home_assistant_entity="sensor.different")
+    )
+    changed_source = await Analytics(store).history(start, start + 60_000_000, "1m", 1500)
+    assert changed_source["series"]["mean_ev_w"] == [None]
+    await store.save_config(
+        ConfigUpdate(
+            expected_revision=4,
+            active_device_id="11-22-33-44-55-66-77-88",
+            home_assistant_entity="sensor.power",
+        )
+    )
+    inactive = await Analytics(store).history(start, start + 60_000_000, "1m", 1500, DEVICE)
+    assert inactive["series"]["mean_ev_w"] == [None]
+    assert inactive["series"]["ev_coverage_pct"] == [0]
+
+
+async def test_ev_chart_clips_retention_and_reads_beyond_one_day(store: Store) -> None:
+    start = timestamp_us("2026-01-05T00:00:00Z")
+    await store.save_config(
+        ConfigUpdate(
+            expected_revision=2,
+            home_assistant_enabled=True,
+            home_assistant_url="http://ha.fixture",
+            home_assistant_entity="sensor.power",
+            home_assistant_token=SecretStr("fixture-token"),
+        )
+    )
+    config = await store.config()
+    end = start + 25 * 3600_000_000
+    for left in range(start, end, 900_000_000):
+        assert (
+            await store.save_ev_history(
+                config,
+                left,
+                left + 900_000_000,
+                [EVInterval(left, left + 900_000_000, 3000_000)],
+            )
+            == 1
+        )
+    complete = await Analytics(store).history(start, end, "6h", 1500)
+    assert complete["series"]["mean_ev_w"] == [3000] * 5
+    assert complete["series"]["ev_coverage_pct"] == [100] * 5
+    async with store.write() as conn:
+        await conn.execute(
+            "INSERT INTO retention_state(device_id,raw_before_us) VALUES(?,?)",
+            (DEVICE, start + 3 * 3600_000_000),
+        )
+    result = await Analytics(store).history(start, end, "6h", 1500)
+    assert result["series"]["mean_ev_w"] == [3000] * 5
+    assert result["series"]["ev_coverage_pct"] == [50, 100, 100, 100, 100]
+
+
 @pytest.mark.parametrize(
     "end,dates,hours",
     [

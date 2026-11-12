@@ -18,6 +18,7 @@ export class DemandChart {
   constructor(
     private target: HTMLElement,
     private indicators: (visible: ChartIndicators) => void,
+    private rangeChanged?: (from: Date, to: Date) => void,
   ) {
     this.observer = new ResizeObserver(() => this.plot?.setSize({
       width: Math.max(1, target.clientWidth), height: 340,
@@ -33,6 +34,8 @@ export class DemandChart {
     const s = history.series;
     // Incomplete bucket means are not drawn as a fully supported continuous curve.
     const means = s.mean_import_w.map((value, i) => s.coverage_pct[i] === 100 ? value : null);
+    const evMeans = s.mean_ev_w.map((value, i) => s.ev_coverage_pct[i] === 100 ? value : null);
+    const hasEV = s.mean_ev_w.some(value => value !== null);
     const theme = getComputedStyle(this.target);
     const color = (token: string): string => theme.getPropertyValue(token).trim();
     const seconds = (intervals: { from: string; to: string }[]): number[][] => intervals.map(interval => [
@@ -98,12 +101,26 @@ export class DemandChart {
       width: Math.max(1, this.target.clientWidth), height: 340,
       cursor: { drag: { x: true, y: false } },
       scales: { x: { min: new Date(history.from).getTime() / 1000, max: new Date(history.to).getTime() / 1000 } },
-      hooks: { drawClear: [shadeOffPeak], draw: [drawThreshold] },
+      hooks: {
+        drawClear: [shadeOffPeak], draw: [drawThreshold],
+        setScale: [(plot, key) => {
+          if (!this.rangeChanged || key !== "x" || plot.status !== 1) return;
+          const { min, max } = plot.scales.x;
+          if (min == null || max == null) return;
+          const from = new Date(Math.round(min) * 1000), to = new Date(Math.round(max) * 1000);
+          if (from >= to) return;
+          // Finish uPlot's scale update before the range callback replaces the chart.
+          queueMicrotask(() => {
+            if (this.plot === plot) this.rangeChanged?.(from, to);
+          });
+        }],
+      },
       series: [
         { label: "Bucket end", ...(context.timezone ? { value: (_plot: uPlot, value: number) =>
           value == null ? "--" : new Date(value * 1000).toLocaleString(undefined, { timeZone: context.timezone, timeZoneName: "short" }) } : {}) },
         { label: "Observed mean (W)", stroke: color("--chart-mean"), width: 2, spanGaps: false },
         { label: "Sampled peak (W)", stroke: color("--chart-peak"), width: 1, spanGaps: false },
+        ...(hasEV ? [{ label: "EV charging (W)", stroke: color("--chart-ev"), width: 2, spanGaps: false }] : []),
         ...(context.grid ? [{ label: "Grid peak reference (W)", stroke: color("--muted"), width: 1, dash: [3, 3], spanGaps: false }] : []),
       ],
       axes: [
@@ -112,9 +129,11 @@ export class DemandChart {
             timeZone: context.timezone, hour: "2-digit", minute: "2-digit", hour12: false,
           })) } : {}) },
         { ...axis, label: history.method.power_basis === "nonnegative_grid_import_excluding_ev"
-          ? "Non-EV grid import (W)" : "Grid import (W)", size: 65 },
+          ? hasEV ? "Non-EV / EV power (W)" : "Non-EV grid import (W)"
+          : hasEV ? "Grid / EV power (W)" : "Grid import (W)", size: 65 },
       ],
     }, [s.bucket_end_epoch_s, means, s.sampled_peak_w,
+      ...(hasEV ? [evMeans] : []),
       ...(context.grid ? [context.grid.series.sampled_peak_w] : [])], this.target);
   }
   focus(start: number, end: number): void {

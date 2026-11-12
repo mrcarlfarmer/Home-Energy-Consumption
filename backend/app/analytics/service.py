@@ -524,6 +524,8 @@ class Analytics:
                 "observed_seconds",
                 "coverage_pct",
                 "rolling_15m_coverage_pct",
+                "mean_ev_w",
+                "ev_coverage_pct",
             )
         }
         budget = [120]
@@ -531,6 +533,14 @@ class Analytics:
             device, version = await self.device(conn, selected)
             source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, retained, warnings = await self.retained_range(conn, device, start, end)
+            config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+            line_source = (
+                ev_source(config, device)
+                if device == config["active_device_id"]
+                and config["home_assistant_url"]
+                and config["home_assistant_entity"]
+                else None
+            )
             daily = start < retained["five_before_us"]
             if daily:
                 if interval not in ("auto", "1d"):
@@ -601,6 +611,10 @@ class Analytics:
                     )
                 return await self.aggregate(conn, device, a, b, budget)
 
+            line_intervals: list[EVInterval] = []
+            line_starts: list[int] = []
+            line_ends: list[int] = []
+            line_right = 0
             for a, b in chart_slots:
                 m = await metric(a, b)
                 rolling = (
@@ -608,6 +622,22 @@ class Analytics:
                     if b - 900_000_000 < retained["five_before_us"]
                     else await metric(b - 900_000_000, b)
                 )
+                ev = Metrics()
+                left = max(a, retained["raw_before_us"])
+                if line_source is not None and left < b:
+                    if b > line_right:
+                        line_right = max(b, min(end, left + DAY_US))
+                        line_intervals = await self.store.ev_rows(
+                            conn, line_source, left, line_right
+                        )
+                        line_starts = [row.start for row in line_intervals]
+                        line_ends = [row.end for row in line_intervals]
+                    for row in line_intervals[
+                        bisect_right(line_ends, left) : bisect_left(line_starts, b)
+                    ]:
+                        duration = min(b, row.end) - max(left, row.start)
+                        if duration > 0 and row.power_mw is not None:
+                            ev.add_duration(row.power_mw, duration)
                 values: tuple[float | None, ...] = (
                     a / 1_000_000,
                     b / 1_000_000,
@@ -618,6 +648,8 @@ class Analytics:
                     m.observed_us / 1_000_000,
                     100 * m.observed_us / (b - a),
                     100 * rolling.observed_us / 900_000_000,
+                    ev.energy_ws * 1_000_000 / ev.observed_us if ev.observed_us else None,
+                    100 * ev.observed_us / (b - a),
                 )
                 for key, value in zip(series, values, strict=True):
                     series[key].append(value)

@@ -90,6 +90,7 @@ export interface History {
     mean_import_w: (number | null)[]; sampled_peak_w: (number | null)[];
     peak_at_epoch_s: (number | null)[]; rolling_15m_w: (number | null)[];
     coverage_pct: number[]; rolling_15m_coverage_pct: number[];
+    mean_ev_w: (number | null)[]; ev_coverage_pct: number[];
   };
 }
 export interface DayEvent {

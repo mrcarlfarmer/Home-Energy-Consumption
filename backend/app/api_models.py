@@ -219,6 +219,8 @@ class HistorySeries(BaseModel):
     observed_seconds: list[float]
     coverage_pct: list[float]
     rolling_15m_coverage_pct: list[float]
+    mean_ev_w: list[float | None]
+    ev_coverage_pct: list[float]
 
 
 class History(TimeRange):

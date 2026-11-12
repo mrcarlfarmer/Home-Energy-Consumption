@@ -42,6 +42,11 @@ test("daily date links open real calendar analysis, all three views and preserve
   await page.getByRole("button", { name: "Inspect", exact: true }).last().click();
   await expect(page.getByRole("link", { name: "Daily demand", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.locator("#day-chart canvas").first()).toBeVisible();
+  await expect(page.locator("#day-chart .u-legend")).toContainText("EV charging (W)");
+  await expect(page.locator("#day-chart .u-legend")).toContainText("Grid peak reference (W)");
+  await page.getByRole("button", { name: "Peak window", exact: true }).click();
+  await expect(page.locator("#from")).toHaveValue(from);
+  await expect(page.locator("#to")).toHaveValue(to);
   await expect(page.locator("#daily-page")).toContainText("Derived non-EV peak");
   await page.reload();
   await expect(page.locator("#day-date")).toHaveValue(date!);

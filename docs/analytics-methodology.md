@@ -268,7 +268,16 @@ The graph's auto-refresh toggle is independent of collection. Pausing it keeps
 the existing analysis and zoom stable while live readings continue. Manual refresh,
 range changes and the EV toggle still request new analysis. Window arrows shift
 the exact elapsed duration and pin the resulting dates; presets follow the latest
-window again. They do not alter any stored measurement.
+window again. Dragging across the chart applies a custom fixed range, updates the
+date inputs and recalculates analysis; subsequent refreshes and EV-basis changes
+keep those bounds. They do not alter any stored measurement.
+
+The EV charging line uses duration-weighted recorded Home Assistant power for the
+active meter, independently of grid coverage and the exclusion toggle. Its
+coverage is recorded EV duration divided by the full bucket duration. Like grid
+means, incomplete buckets are not drawn. Missing/unavailable states and expired
+raw-history periods remain gaps rather than zero. Recorded zero power is valid.
+This power line is not cumulative energy or a billing measurement.
 
 Off-peak shading comes from applicable cached `ECO7_NIGHT` household rate
 intervals and, when opted in, separately styled `EV_BONUS` intervals from the
