@@ -11,7 +11,7 @@ from app.db.store import Conflict, Store, one
 from app.kraken import Kraken, KrakenError
 from app.main import create_app
 from app.models import ConfigUpdate, iso, now_us, timestamp_us
-from app.poller import Poller
+from app.poller import Poller, daily_recovery_window
 from app.settings import Settings
 from app.storage import DAY_US
 from app.streaming import Hub
@@ -95,6 +95,78 @@ async def test_requested_history_survives_restart_and_automatic_lookback(store: 
     merged = await store.recovery(DEVICE)
     assert merged["cursor_us"] == start
     assert at - 180_000_000 <= merged["target_us"] <= now_us() - 180_000_000
+
+
+@pytest.mark.parametrize(
+    ("at", "day", "start", "end"),
+    [
+        (
+            "2026-03-30T00:05:00+01:00",
+            "2026-03-29",
+            "2026-03-29T00:00:00Z",
+            "2026-03-29T23:00:00Z",
+        ),
+        (
+            "2026-10-26T00:05:00Z",
+            "2026-10-25",
+            "2026-10-24T23:00:00Z",
+            "2026-10-26T00:00:00Z",
+        ),
+    ],
+)
+def test_daily_recovery_window_uses_previous_local_day_and_dst(
+    at: str, day: str, start: str, end: str
+) -> None:
+    window = daily_recovery_window(timestamp_us(at), "Europe/London")
+    assert window == (day, timestamp_us(start), timestamp_us(end))
+
+
+def test_daily_recovery_waits_for_local_day_to_settle() -> None:
+    assert daily_recovery_window(
+        timestamp_us("2026-11-12T00:04:59Z"), "Europe/London"
+    ) is None
+
+
+async def test_daily_recovery_is_persisted_and_scheduled_once(store: Store) -> None:
+    at = timestamp_us("2026-03-30T00:05:00+01:00")
+    day, start, end = daily_recovery_window(at, "Europe/London")
+    assert await store.schedule_daily_recovery(DEVICE, day, start, end, 2, at)
+    state = await store.recovery(DEVICE)
+    assert state is not None
+    assert state["cursor_us"] == start
+    assert state["target_us"] == end
+    assert state["requested"] == 1
+    await store.close()
+    await store.open()
+    assert await store.recovery(DEVICE) == state
+    assert not await store.schedule_daily_recovery(DEVICE, day, start, end, 2, at)
+    assert await store.recovery(DEVICE) == state
+    async with store.read() as conn:
+        assert (
+            await one(
+                conn,
+                "SELECT last_day FROM daily_recovery_schedule WHERE device_id=?",
+                (DEVICE,),
+            )
+        )[0] == day
+
+
+async def test_live_collection_queues_the_previous_local_day(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = timestamp_us("2026-11-12T00:05:00Z")
+    monkeypatch.setattr("app.poller.now_us", lambda: at)
+    client = Kraken()
+    client.verify = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    client.telemetry = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    try:
+        await Poller(store, client, Hub()).collect(await store.config())
+        state = await store.recovery(DEVICE)
+        assert state is not None
+        assert state["cursor_us"] == timestamp_us("2026-11-11T00:00:00Z")
+        assert state["target_us"] == timestamp_us("2026-11-12T00:00:00Z")
+    finally:
+        await client.close()
 
 
 @pytest.mark.parametrize("problem", ["revision", "meter", "disabled", "expired", "recent"])

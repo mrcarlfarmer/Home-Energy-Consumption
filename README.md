@@ -82,6 +82,8 @@ pending recovery work and excluding the newest three minutes.
 
 The collector skips fully supported fifteen-minute windows and retries missing
 ones through the existing Octopus rate governor, alternating with live requests.
+Once daily after 00:05 in the configured timezone, it also queues the previous
+complete local calendar day for that same rate-governed review.
 Watch the recovery status and Collection health; a long range can take many
 polling intervals. An animated indicator shows queued/checking/waiting recovery,
 along with the cursor, target and last progress time. Paused recovery explains
