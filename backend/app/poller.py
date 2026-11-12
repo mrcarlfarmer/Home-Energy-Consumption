@@ -17,9 +17,9 @@ log = logging.getLogger(__name__)
 
 
 def daily_recovery_window(at: int, timezone: str) -> tuple[str, int, int] | None:
-    local_now = (
-        datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=at)
-    ).astimezone(ZoneInfo(timezone))
+    local_now = (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=at)).astimezone(
+        ZoneInfo(timezone)
+    )
     if local_now.hour == 0 and local_now.minute < 5:
         return None
     today = local_now.date()

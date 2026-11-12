@@ -563,9 +563,7 @@ class Store:
         retained: dict[str, Any],
         at: int,
     ) -> tuple[int, int]:
-        async with conn.execute(
-            "SELECT * FROM recovery_state WHERE device_id=?", (device,)
-        ) as cur:
+        async with conn.execute("SELECT * FROM recovery_state WHERE device_id=?", (device,)) as cur:
             previous = await cur.fetchone()
         if previous and previous["status"] in ("pending", "paused"):
             start = min(

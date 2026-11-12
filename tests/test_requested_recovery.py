@@ -122,9 +122,7 @@ def test_daily_recovery_window_uses_previous_local_day_and_dst(
 
 
 def test_daily_recovery_waits_for_local_day_to_settle() -> None:
-    assert daily_recovery_window(
-        timestamp_us("2026-11-12T00:04:59Z"), "Europe/London"
-    ) is None
+    assert daily_recovery_window(timestamp_us("2026-11-12T00:04:59Z"), "Europe/London") is None
 
 
 async def test_daily_recovery_is_persisted_and_scheduled_once(store: Store) -> None:
