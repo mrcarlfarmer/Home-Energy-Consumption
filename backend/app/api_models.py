@@ -24,6 +24,7 @@ class PublicConfig(BaseModel):
     home_assistant_enabled: bool
     has_home_assistant_token: bool
     tariff_pricing_enabled: bool
+    ev_savings_from: str | None = None
 
 
 class AuthState(BaseModel):
@@ -65,9 +66,12 @@ class Health(BaseModel):
     storage_paused: bool
     maintenance_error: str | None
     last_maintenance_at: str | None
+    recovery_state: Literal["idle", "pending", "complete", "paused"]
+    recovery_active: bool
     recovery_pending: bool
     recovery_cursor_at: str | None
     recovery_target_at: str | None
+    recovery_last_progress_at: str | None
     recovery_gap_count: int
     recovery_error: str | None
 
@@ -151,6 +155,11 @@ class PricingEstimate(BaseModel):
     priced_seconds_above: float
     fetched_at: str | None
     warning: str
+    pricing_revision: str | None = None
+
+
+class DailyPeakMetrics(DailyMetrics):
+    pricing: PricingEstimate
 
 
 class TariffPrice(TimeRange):
@@ -170,6 +179,11 @@ class TariffStatus(BaseModel):
     schedule: str | None
     rates: list[TariffPrice]
     warnings: list[str]
+    pricing_revision: str | None = None
+    adjustment_enabled: bool = False
+    ev_coverage_pct: float | None = None
+    charging: list[TimeRange] = Field(default_factory=list)
+    unresolved: list[TimeRange] = Field(default_factory=list)
 
 
 class RecoveryStatus(TimeRange):
@@ -191,7 +205,7 @@ class Summary(Metrics, TimeRange):
 class DailyPeaks(TimeRange):
     device_id: str
     timezone: str
-    daily_peaks: list[DailyMetrics]
+    daily_peaks: list[DailyPeakMetrics]
     warnings: list[str]
 
 
@@ -217,4 +231,45 @@ class History(TimeRange):
     rolling_evaluation: str
     series: HistorySeries
     method: Method
+    warnings: list[str]
+
+
+class DayCoverage(BaseModel):
+    meter_seconds: float
+    ev_seconds: float | None
+    joint_seconds: float | None
+    adjusted_seconds: float | None
+
+
+class DayEvent(TimeRange):
+    kind: Literal["meter_gap", "ev_gap", "ev_transition", "exceedance"]
+    peak_w: int | None
+
+
+class DayAnalysis(TimeRange):
+    date: str
+    today: str
+    timezone: str
+    calendar_to: str
+    partial: bool
+    device_id: str
+    data_version: int
+    config_revision: int
+    ev_savings_from: str | None
+    exclude_ev: bool
+    ev_unavailable_reason: str | None
+    grid: Summary
+    adjusted: Summary | None
+    history: History
+    grid_history: History | None
+    tariff: TariffStatus
+    charging: list[TimeRange]
+    meter_gaps: list[TimeRange]
+    transition_gaps: list[TimeRange]
+    coverage: DayCoverage
+    peak_overlaps_ev: bool | None
+    events: list[DayEvent]
+    event_count: int
+    raw_available: bool
+    recovery_available: bool
     warnings: list[str]

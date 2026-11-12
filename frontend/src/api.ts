@@ -6,6 +6,7 @@ export interface Config {
   home_assistant_url: string | null; home_assistant_entity: string | null;
   home_assistant_enabled: boolean; has_home_assistant_token: boolean;
   tariff_pricing_enabled: boolean;
+  ev_savings_from: string | null;
 }
 export interface TariffStatus {
   enabled: boolean; state: string; error_code: string | null;
@@ -13,6 +14,11 @@ export interface TariffStatus {
   tariff_name: string | null; tariff_code: string | null; schedule: string | null;
   rates: { from: string; to: string; pence_per_kwh: number; band: string }[];
   warnings: string[];
+  pricing_revision: string | null;
+  adjustment_enabled: boolean;
+  ev_coverage_pct: number | null;
+  charging: { from: string; to: string }[];
+  unresolved: { from: string; to: string }[];
 }
 export interface RecoveryStatus {
   device_id: string; from: string; to: string; state: "pending";
@@ -29,8 +35,10 @@ export interface Snapshot {
     database_bytes: number | null; disk_free_bytes: number | null;
     storage_budget_bytes: number; storage_paused: boolean;
     maintenance_error: string | null; last_maintenance_at: string | null;
+    recovery_state: "idle" | "pending" | "complete" | "paused"; recovery_active: boolean;
     recovery_pending: boolean; recovery_cursor_at: string | null;
     recovery_target_at: string | null; recovery_gap_count: number;
+    recovery_last_progress_at: string | null;
     recovery_error: string | null;
   };
   home_assistant?: {
@@ -47,8 +55,16 @@ export interface StorageStatus {
   policy: { raw_days: number; five_minute_days: number; daily_days: number; recovery_days: number };
   retention: { raw_before_us: number; five_before_us: number; archive_timezone: string | null } | null;
 }
+export interface PricingEstimate {
+  enabled: boolean; available: boolean;
+  energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
+  price_coverage_pct: number | null; priced_seconds_above: number;
+  fetched_at: string | null; warning: string;
+  pricing_revision: string | null;
+}
 export interface Summary extends Metrics {
   device_id: string;
+  data_version: number;
   warnings: string[];
   from: string; to: string;
   method: { power_basis: string };
@@ -57,19 +73,15 @@ export interface Summary extends Metrics {
     energy_when_above_kwh: number | null; excess_energy_kwh: number | null;
   }[];
   daily_peaks: (Metrics & { date: string })[];
-  pricing: {
-    enabled: boolean; available: boolean;
-    energy_when_above_gbp: number | null; excess_energy_gbp: number | null;
-    price_coverage_pct: number | null; priced_seconds_above: number;
-    fetched_at: string | null; warning: string;
-  };
+  pricing: PricingEstimate;
 }
 export interface DailyPeaks {
   timezone: string; from: string; to: string; warnings: string[];
-  daily_peaks: (Metrics & { date: string })[];
+  daily_peaks: (Metrics & { date: string; pricing: PricingEstimate })[];
 }
 export interface History {
   from: string; to: string;
+  data_version: number;
   interval_seconds: number;
   bucket_alignment: string; warnings: string[];
   method: { power_basis: string };
@@ -80,6 +92,26 @@ export interface History {
     coverage_pct: number[]; rolling_15m_coverage_pct: number[];
     mean_ev_w: (number | null)[]; ev_coverage_pct: number[];
   };
+}
+export interface DayEvent {
+  kind: "meter_gap" | "ev_gap" | "ev_transition" | "exceedance";
+  from: string; to: string; peak_w: number | null;
+}
+export interface DayAnalysis {
+  date: string; today: string; timezone: string;
+  from: string; to: string; calendar_to: string; partial: boolean;
+  device_id: string; data_version: number; config_revision: number;
+  ev_savings_from: string | null;
+  exclude_ev: boolean; ev_unavailable_reason: string | null;
+  grid: Summary; adjusted: Summary | null;
+  history: History; grid_history: History | null; tariff: TariffStatus;
+  charging: { from: string; to: string }[];
+  meter_gaps: { from: string; to: string }[];
+  transition_gaps: { from: string; to: string }[];
+  coverage: { meter_seconds: number; ev_seconds: number | null; joint_seconds: number | null; adjusted_seconds: number | null };
+  peak_overlaps_ev: boolean | null;
+  events: DayEvent[]; event_count: number;
+  raw_available: boolean; recovery_available: boolean; warnings: string[];
 }
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }

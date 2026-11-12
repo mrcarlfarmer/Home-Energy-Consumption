@@ -90,6 +90,7 @@ cd "$HOME/home-energy-source"
 APP_REV=$(git rev-parse --short=12 HEAD)
 ENERGY_IMAGE="home-energy-monitor:pi-${APP_REV}"
 docker buildx build --platform linux/arm64 --load \
+  --build-arg APP_BUILD_VERSION="$(git rev-list --count HEAD)-${APP_REV}" \
   --tag "$ENERGY_IMAGE" .
 docker image inspect "$ENERGY_IMAGE" \
   --format '{{.Os}}/{{.Architecture}} {{.Id}}'

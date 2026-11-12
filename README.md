@@ -9,6 +9,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - 5-minute through 30-day shortcuts (including 12 hours), custom history, sampled peaks and an expanded five-day peaks table.
 - Reference comparison at 6 kW: observed time above the rating, all energy during those periods, and only the excess energy.
 - Optional Octopus household tariff pricing, with separate estimated costs for all energy while above 6 kW and only the excess.
+- Optional Intelligent Octopus Go bonus half-hours inferred from Ohme history under an explicit Prioritise Savings assumption.
 - Optional Ohme power history from Home Assistant, with a separate EV-excluded analysis view and joint-data coverage.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
 - Always-on collection, restart-safe gap recovery, bounded storage, 30-day raw / 396-day five-minute / ten-year daily history, and gap/coverage reporting with local-calendar/DST handling.
@@ -32,7 +33,7 @@ setting `ENERGY_DATA_DIRECTORY` for Compose.
 1. Install Docker Engine and the Compose plugin on a **64-bit** OS.
 2. Follow [deployment](docs/deployment.md) to create an administrator password file and a locally trusted HTTPS certificate. Never put real secrets in Git.
 3. Copy `.env.example` to `.env`, set your Pi's LAN address, certificate paths, trusted hostnames and HTTPS origins.
-4. Run `docker compose up -d --build`.
+4. Set the build version from Git and run `docker compose up -d --build`, following the [deployment commands](docs/deployment.md).
 5. Open your configured HTTPS address on port 8443, sign in and enter your Octopus API key/account. Test connectivity to discover the electricity meter, select it, then save with polling enabled.
 
 The device ID is the **electricity smart meter EUI-64**, not the Home Mini serial number. Polling defaults to 45 seconds. No port forwarding or external dashboard service is required.
@@ -56,8 +57,11 @@ Dragging across the graph selects a custom fixed window and updates **From** and
 joint meter/Home Assistant data. The graph shows observed mean and sampled peak,
 without the trailing fifteen-minute curve. A dashed **6 kW** reference appears
 when within the visible power scale. Shading identifies API-defined household
-off-peak intervals that overlap the view, using cached tariff pricing; missing
-or older tariff periods are not guessed. Fetch rates in Settings first.
+off-peak intervals and, when configured, estimated EV bonus half-hours. Separate
+strips identify observed charging and unresolved rates. Expand **EV charging and
+bonus-rate periods** for timestamps and prices. These indicators work in both EV
+analysis modes and clip to chart zoom; missing periods are not guessed.
+Fetch rates in Settings first.
 
 An amber **EV charging (W)** line shows recorded Home Assistant mean power for
 the active meter, whether EV exclusion is on or off. It is independent of meter
@@ -68,7 +72,12 @@ history is unavailable. The line appears when the window contains EV readings.
 at the viewed window, newest first, independently of the graph's duration.
 The latest day may be partial. It uses the configured calendar timezone (or
 archive timezone for archived history), the selected meter and the EV toggle.
-Unavailable days remain unavailable rather than showing zero.
+It also shows each day's estimated cost of only the excess energy above 6 kW,
+using dated household tariff rates. Costs cover observed energy only, not gaps;
+the latest partial day is not extrapolated. Unavailable days or incomplete
+price coverage remain
+unavailable rather than showing zero. Enable and fetch tariff pricing in
+Settings to see costs.
 
 ## Recovering gaps in the graph
 
@@ -80,8 +89,16 @@ pending recovery work and excluding the newest three minutes.
 
 The collector skips fully supported fifteen-minute windows and retries missing
 ones through the existing Octopus rate governor, alternating with live requests.
+Once daily after 00:05 in the configured timezone, it also queues the previous
+complete local calendar day for that same rate-governed review.
 Watch the recovery status and Collection health; a long range can take many
-polling intervals. Recovered readings update the graph, coverage, energy and
+polling intervals. An animated indicator shows queued/checking/waiting recovery,
+along with the cursor, target and last progress time. Paused recovery explains
+whether polling, storage or connection settings need attention. Completion is
+shown separately from **finished with gaps**, including after a page reload.
+Disconnected live updates show that progress is unknown, not that recovery
+finished. The animation respects reduced-motion preferences.
+Recovered readings update the graph, coverage, energy and
 cost estimates. Missing/unavailable upstream data remains a visible gap, never
 an interpolated line or fabricated zero. This recovers Octopus meter data, not
 missing Home Assistant history, and cannot restore expired raw archives.
@@ -116,7 +133,12 @@ No charging controls or Home Assistant mutations are issued.
 
 EV exclusion is an estimate based on recorded power changes, not a household
 submeter. Missing/unavailable EV history is unknown, not zero. Unreported Home
-Assistant outages can leave stale recorded states. Adjusted analysis is limited
+Assistant outages can leave stale recorded states. Meter and Ohme updates can
+arrive at different times, so the minute before and after each recorded charging
+start/stop is also unknown. These periods are omitted from adjusted peaks,
+energy, threshold totals and costs, with reduced coverage shown rather than
+guessed household demand. Original charging evidence still determines bonus
+off-peak eligibility. Adjusted analysis is limited
 to the selected active meter's retained raw readings (normally 30 days); older
 grid-only aggregates cannot be subtracted accurately. Solar/batteries can still
 make non-EV grid import lower than actual household load.
@@ -138,8 +160,9 @@ The app discovers dated import agreements and retrieves published unit rates
 including VAT. For supported day/night tariffs, including Intelligent Octopus Go,
 it uses the account API's household schedule rather than guessing off-peak times.
 Rate changes and UK clock changes are respected. These are household-rate
-estimates, excluding standing charges, EV-specific smart-charging adjustments and
-account-specific discounts, not an Octopus bill or guaranteed battery savings.
+estimates, excluding standing charges and account-specific discounts, not an
+Octopus bill or guaranteed battery savings. Without the optional assumption below,
+smart-charging adjustments remain excluded.
 Exceeding 6 kW does not itself incur an extra Octopus charge.
 
 Choose **Excluding EV charging** to price supported non-EV grid import using Home
@@ -151,8 +174,64 @@ older periods may have no applicable prices. Unsupported schedules or
 payment-method-specific feeds are reported explicitly, not guessed. See the
 [methodology](docs/analytics-methodology.md) for archived-data limitations.
 
-This version upgrades the database to schema 7. Take a consistent private backup
+### Ohme bonus off-peak periods
+
+If **all** your charging uses Intelligent Octopus Go **Prioritise Savings**,
+enter the date this became true in **Settings > Tariff pricing > Prioritise
+Savings start date**, save, then **Fetch Octopus pricing**. For example, enter
+`2026-10-01` for 1 October 2026. Leave it blank to keep published-schedule pricing.
+The date is interpreted in Europe/London, independently of browser timezone.
+
+From that date, recorded positive Ohme power earns an **estimated off-peak rate
+for the entire settlement half-hour**, not just the charging minutes. The rate
+uses the dated night price for the matching Intelligent agreement. This changes
+the above-6 kW tile, comparison row and daily excess costs consistently, including
+when EV demand is excluded. It never changes measured demand or threshold energy.
+
+This is an explicit assumption, not automatic detection of smart versus Max
+charging or independent verification of the six-hour allowance. Do not enable it
+if you use Max/Boost or Prioritise Target beyond the allowance. Clear the date if
+that policy changes. Account/meter or Ohme URL/entity changes through partial API
+updates clear it unless explicitly reconfirmed.
+
+Missing EV evidence does not prove a half-hour was charged at the peak rate:
+affected daytime costs remain unavailable. A supported charge can establish a
+bonus even if other minutes in that half-hour are missing. Historical zero
+charging requires complete recorded half-hour coverage. An unfinished/future slot
+can still earn a bonus, so it is not guaranteed peak-priced.
+
+Existing power history is reused, including corrections and backfill; no extra
+Home Assistant entities, automations or charger controls are required. Stale
+Recorder states, standby/preconditioning power and solar/battery behaviour can
+affect inference. A home battery supplying only the house does not change earned
+rate periods, but the graph still measures grid import, not total household load
+or battery savings. Archived data without retained EV evidence cannot establish
+new bonus periods. See the [methodology](docs/analytics-methodology.md).
+
+This version upgrades the database to schema 8. Take a consistent private backup
 before upgrading; rolling back to an older application requires that backup.
+
+## Daily analysis
+
+Select a date in **Daily sampled peaks** to open that calendar day's detail page.
+The links retain the selected meter, calendar timezone and EV analysis basis, and
+can be bookmarked or opened in another tab. The page uses the full local day,
+not the table's possibly clipped window; today ends at request time. Clock-change
+days retain their actual 23/25-hour duration.
+
+**Daily demand** shows supported energy, peaks, the 6 kW comparison, applicable
+excess costs, peak-window inspection and a grid/non-EV comparison. **EV & tariff**
+separates recorded charging from scheduled and estimated bonus household slots.
+**Coverage & events** distinguishes meter gaps, missing Ohme evidence, charging
+transition guards and observed exceedance episodes, with an eligible meter-only
+recovery action. Missing data and unavailable prices are never represented as
+zero. Archived days retain grid metrics at their actual resolution; EV exclusion
+and detailed events require raw history.
+
+Daily views are fixed snapshots with manual refresh; live collection continues.
+Returning to the overview in the same tab preserves its range and scroll position.
+These views describe evidence, not appliance diagnoses, complete-day extrapolations
+or guaranteed battery savings.
 
 ## Documentation
 
@@ -169,6 +248,17 @@ before upgrading; rolling back to an older application requires that backup.
 - [Original detailed implementation plan](docs/implementation-plan.md)
 
 ## Development
+
+The sign-in page and dashboard footer display **Build N (revision)**. `N` is the
+number of commits reachable from the built revision, so every new commit advances
+the number without editing a version file. Rebuilding the same commit keeps its
+number; branches can share a number, so the 12-character Git revision identifies
+the exact source. Builds from modified local checkouts show **uncommitted changes**.
+The number advances when changes are committed, not on each edit or browser refresh.
+Frontend builds derive this automatically from full Git history (use
+`git fetch --unshallow` for a shallow clone). Published Docker images bake in the
+same identity through `APP_BUILD_VERSION`; redeploy the new image to see it in the UI.
+This build identifier is separate from the package/API semantic version.
 
 Python 3.12+ and Node 22+ are required. On Windows PowerShell:
 

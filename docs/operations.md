@@ -7,6 +7,10 @@ attempts fifteen-minute historical chunks within the configured lookback (one da
 by default), alternating with live requests. All rows are deduplicated by
 device/native timestamp. Unresolved/partial intervals remain visible and are not
 replaced by zero or fabricated historical data.
+After 00:05 in the configured display timezone, the collector queues a once-per-day
+review of the previous complete local calendar day. It skips fully covered chunks
+and sends missing chunks through the same shared rate governor as live telemetry;
+the daily job does not make additional or faster upstream requests.
 See [storage management](storage-management.md) for pause/recovery semantics.
 
 Token refresh is single-flight and proactive. A rejected token gets one renewal/operation retry. Persistent auth/configuration failures stop automatic retries until settings change or a successful test of the saved credentials resumes already-enabled polling. HTTP and GraphQL throttling share cooldowns with connectivity tests. Transient failures use bounded exponential backoff/jitter and respect vendor retry timing.

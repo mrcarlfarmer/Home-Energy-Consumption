@@ -55,8 +55,9 @@ spring/autumn clock changes retain their actual duration. Other schedules and
 payment-method-specific feeds are explicitly unsupported rather than inferred.
 EV-device-specific prices are not applied to household load.
 
-These are household-rate estimates including VAT, excluding standing charges,
-EV-specific smart-charging adjustments and account-specific discounts. Grid-only
+These are household-rate estimates including VAT, excluding standing charges
+and account-specific discounts. Smart-charging adjustments are excluded unless
+the explicit Prioritise Savings assumption below is enabled. Grid-only
 estimates may therefore differ from the actual billed price of smart EV charging.
 Exceeding 6 kW does not itself incur another charge. Neither estimate promises
 battery savings: losses, capacity, charging costs and dispatch are not modelled.
@@ -73,6 +74,65 @@ retained raw readings; otherwise the cost is unsupported because the aggregate
 cannot identify when its above-threshold energy occurred. The rolling tariff
 cache covers at most 31 days back (bounded by raw retention) and two days ahead.
 It does not promise prices for the full ten-year archive.
+
+### Intelligent Octopus Go bonus half-hours
+
+The optional `ev_savings_from` UK-local date confirms that every recorded Ohme
+charge from that date uses **Prioritise Savings**, with no Max/Boost or
+allowance-exhausted charging. The setting is deliberately opt-in, not inferred
+from power shape. It applies only to dated Intelligent (`INTELLI-` product)
+agreements with supported API household day/night schedules. It is not a general
+rule for Economy 7 or other tariffs.
+
+Any positive recorded EV power within an eligible settlement half-hour awards
+that half-hour an **estimated** household bonus rate. A ten-minute charge at
+18:07-18:17 therefore awards 18:00-18:30. This does not claim that thirty minutes
+of the six-hour allowance were used: the app relies on Prioritise Savings to
+enforce that allowance and does not independently reconstruct it. It cannot
+prove the charger mode or supplier eligibility from power alone. Standby and
+preconditioning must not be mistaken for qualifying charging when configuring
+this assumption.
+
+The shared resolver reads the entire UTC-aligned half-hour even for a shorter
+query. A charge at 18:17 can therefore determine the rate for a view ending at
+18:05. Repeated local half-hours during autumn DST remain distinct UTC slots.
+The activation date is interpreted in Europe/London; before it, published
+household schedules remain unchanged. Actual dated night prices are cached
+separately from expanded household schedules, so daytime-only queries do not
+substitute the day price or today's night price for a missing historic price.
+Rate/agreement boundaries inside a slot retain their exact prices and dates.
+
+One supported positive interval is sufficient to award an estimated bonus;
+unknown minutes elsewhere in that half-hour do not revoke that evidence.
+Conversely, no observed charge is not proof of no charging: complete valid EV
+coverage of the half-hour is required to retain its ordinary daytime price.
+Unknown/unavailable history, expired history and unfinished/future slots leave
+the affected effective rate unresolved. Missing dated night prices also leave
+an inferred bonus unpriced. Both threshold cost totals remain null when any
+observed above-threshold energy intersects an unresolved rate; observed periods
+without exceedance can still cost zero. Telemetry and EV coverage stay separate
+from above-threshold price coverage.
+
+Effective rates are independent of EV exclusion. Removing EV power never removes
+the earned household bonus. Both cost measures use the rate applicable to the
+actual supported demand segment; no change is made to energy, peaks, duration
+or excess arithmetic. For a fully observed half-hour of 8 kW grid import at
+8p/kWh, the 4 kWh while above 6 kW costs GBP 0.32 and the 1 kWh excess costs
+GBP 0.08. All costs remain sampled-data estimates, not supplier billing or
+predictions of savings from a home battery.
+
+The existing source-scoped EV history is authoritative for this inference and
+retains its Recorder/freshness limitations. Corrections change rates and costs
+without rewriting the published schedule. A base-price refresh cannot delete EV
+history. No extra collection, charger controls or mode/plan entities are needed
+for this explicitly assumed policy. Max/Boost, independent allowance accounting,
+mixed EV/household billing rates and supplier reconciliation are not supported
+by this mode; disable the assumption if they apply.
+
+The resolver uses retained EV intervals, not a charging-shaped household demand
+curve. Older archives without these intervals cannot reconstruct eligibility.
+Existing rules still require raw detail when a rate boundary splits an
+aggregate. No new promise of exact multi-year adjusted costs is made.
 
 ## EV exclusion
 
@@ -95,16 +155,39 @@ charger was online throughout every
 unchanged state: unreported outages can leave stale values. This limitation is
 explicit in the adjusted responses.
 
-Intersect supported meter segments with valid EV intervals, split at every EV
-change, and use `max(0, signed_grid_demand - EV_power)` before applying the same
-energy and strict-threshold arithmetic. Grid gap/null rules remain unchanged.
+Ohme polls every thirty seconds, whereas meter readings and their bounded holds
+use separate timestamps. Subtracting these sources across a charging start/stop
+can leave a brief full-EV-power residual or an artificially low household value.
+For exclusion only, mark the sixty seconds before and after each contiguous,
+known zero-to-positive or positive-to-zero EV change as unknown. This allows one
+Ohme polling period plus the maximum thirty-second meter hold in either direction;
+it is an uncertainty allowance, not a measured clock correction or a guarantee
+against longer reporting delays. Overlapping guards are combined. Unavailable
+states, gaps and unchanged values do not invent charging transitions. Ordinary
+positive power variations are still recorded-state estimates.
+
+The guard is applied before all adjusted integration and peak calculations, not
+as a chart filter or a rule discarding values above 6 kW. Any genuine household
+event inside a guard is also unavailable; events outside it retain the existing
+arithmetic. Guarded time contributes no adjusted energy, threshold duration or
+cost, and reduces joint coverage. Trailing fifteen-minute values crossing a guard
+are unavailable until their full window is supported again. Fetch neighbouring
+EV evidence outside each query/day/cache boundary before deriving the guard, so
+changing zoom, resolution or calendar splits cannot change support. Stored EV
+history and whole-meter analytics remain unchanged. The bonus-rate resolver still
+uses original charging evidence, including charging inside exclusion guards.
+
+Intersect supported meter segments with the remaining valid EV intervals, split
+at every EV change, and use `max(0, signed_grid_demand - EV_power)` before applying
+the same energy and strict-threshold arithmetic. Grid gap/null rules remain unchanged.
 Coverage and time-above percentages use only jointly usable duration. A known
 zero EV reading supports subtraction; missing EV data does not.
 
 Derived peaks include usable meter readings and supported intersection
-boundaries, so an EV power change within a meter segment cannot hide an adjusted
-peak. Daily summaries, chart buckets and the full-coverage trailing fifteen-minute
-curve share this calculation. The live card remains whole-meter grid demand.
+boundaries outside transition guards, so a supported EV power change within a
+meter segment cannot hide an adjusted peak. Daily summaries, chart buckets and
+the full-coverage trailing fifteen-minute curve share this calculation. The live
+card remains whole-meter grid demand.
 This is **non-EV grid import**, not total household load when solar/batteries are
 present.
 
@@ -126,6 +209,39 @@ resolution requires a whole calendar day. This table is independent of the
 graph duration, uses the selected meter and analysis basis, and includes
 unavailable days without inventing peaks. UK DST days retain 23/25-hour coverage
 denominators. Expired EV history remains unknown.
+
+The daily table displays only the estimated cost of excess energy beyond 6 kW,
+using the same tariff calculation as the selected-window summary but clipped
+to that calendar day's actual bounds. These estimates are independent of the
+graph duration and honor the selected meter and EV basis.
+No observed duration or incomplete applicable price coverage yields unavailable
+costs, not zero; supported days without exceedance cost zero when pricing is
+enabled and fetched. The daily telemetry coverage remains separate from price
+coverage, which is included in each cost cell's explanation. Missing-rate and
+pricing-disabled explanations appear below the table heading.
+
+Dates in this table link to a dedicated local-calendar-day analysis. Unlike a
+clipped final table row, this page requests the entire selected calendar day
+(or midnight to the request time for today). Its metrics, chart, applicable
+rates and both analysis bases come from one database read snapshot. The day
+boundary uses the selected IANA timezone, not the browser timezone or a fixed
+24-hour offset; archived daily data explicitly uses its stored calendar timezone.
+
+The day findings identify whether a known original EV state covers the selected
+peak timestamp. Missing EV state leaves attribution unknown, even when there is
+no recorded positive-power period nearby. An overlap is not an appliance
+diagnosis or proof that the EV caused the entire peak. Grid and adjusted totals
+may describe different supported periods, so their difference is not EV energy.
+
+The event log derives meter gaps from the complement of supported meter segments,
+EV gaps from missing known Recorder intervals, transition gaps from the existing
+exclusion guard, and exceedance episodes from contiguous supported segments
+strictly above 6 kW in the selected basis. Below-threshold time or missing evidence
+breaks an episode. Event detail requires raw readings; archives retain their
+metrics without invented events. Logs show at most 200 chronological events,
+with the total count and truncation explained. Peak inspection zooms the chart
+without changing the day totals. Coverage, price availability and recovery
+limitations remain explicit in every view.
 
 The browser plots observed mean and sampled peak only. The history API retains
 trailing 15-minute demand for compatibility: the import integral over the
@@ -163,9 +279,15 @@ means, incomplete buckets are not drawn. Missing/unavailable states and expired
 raw-history periods remain gaps rather than zero. Recorded zero power is valid.
 This power line is not cumulative energy or a billing measurement.
 
-Off-peak shading comes only from applicable cached `ECO7_NIGHT` household rate
-intervals, clipped to the visible time scale, including during chart zoom.
-No schedule is inferred outside the cache or for another meter. The dashed 6 kW
+Off-peak shading comes from applicable cached `ECO7_NIGHT` household rate
+intervals and, when opted in, separately styled `EV_BONUS` intervals from the
+same effective-rate resolver used for costs. Observed charging and unresolved
+rates have distinct strips and a timestamp/price table. All indicators clip to
+the visible time scale, including during chart zoom. Bonus rates remain present
+in both EV bases. No schedule is inferred outside the cache or for another meter.
+Pricing revisions incorporate configuration, meter/EV history and cached prices;
+the browser retries concurrent revisions rather than mixing costs and shading.
+The dashed 6 kW
 reference is drawn only within the visible power scale; it does not force the
 vertical axis to include 6 kW or change sampled values.
 

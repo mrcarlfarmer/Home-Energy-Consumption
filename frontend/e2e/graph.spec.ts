@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { DailyPeaks } from "../src/api";
 
 test.use({ baseURL: "http://127.0.0.1:8767" });
 
@@ -274,4 +275,42 @@ test("daily peak and tariff failures are explicit without losing the demand grap
   await expect(page.locator("#off-peak-status")).toContainText("Tariff cache temporarily unavailable");
   await expect(page.locator("#off-peak-key")).toBeHidden();
   await expect(page.locator("#peak")).toHaveText("8 kW");
+});
+
+test("daily table shows only excess costs and distinguishes zero from unavailable pricing", async ({ page }) => {
+  await page.route("**/api/analytics/daily-peaks?**", async route => {
+    const response = await route.fetch();
+    const daily: DailyPeaks = await response.json();
+    const pricing = [
+      { enabled: false, available: false, energy_when_above_gbp: null, excess_energy_gbp: null, price_coverage_pct: null, warning: "Enable tariff pricing in Settings to estimate costs" },
+      { enabled: true, available: false, energy_when_above_gbp: null, excess_energy_gbp: null, price_coverage_pct: null, warning: "No observed energy is available to price" },
+      { enabled: true, available: false, energy_when_above_gbp: null, excess_energy_gbp: null, price_coverage_pct: 50, warning: "Costs unavailable: some applicable household rates are missing." },
+      { enabled: true, available: true, energy_when_above_gbp: 0, excess_energy_gbp: 0, price_coverage_pct: 100, warning: "Household rates including VAT." },
+      { enabled: true, available: true, energy_when_above_gbp: -1.23, excess_energy_gbp: -0.45, price_coverage_pct: 100, warning: "Household rates including VAT." },
+    ];
+    daily.daily_peaks.forEach((day, index) => {
+      day.pricing = { ...day.pricing, ...pricing[index] };
+    });
+    await route.fulfill({ response, json: daily });
+  });
+  await page.goto("/");
+  await expect(page.locator("#days tr")).toHaveCount(5);
+  await expect(page.locator("#daily-peaks").getByRole("columnheader")).toHaveCount(4);
+  await expect(page.getByRole("columnheader", { name: "Estimated cost while above 6 kW", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Estimated excess cost above 6 kW", exact: true })).toBeVisible();
+  const rows = page.locator("#days tr");
+  await expect(rows.nth(0).locator("td")).toHaveCount(4);
+  await expect(rows.nth(0).locator("td").nth(3)).toHaveText("-£0.45");
+  await expect(rows.nth(1).locator("td").nth(3)).toHaveText("£0.00");
+  await expect(rows.nth(2).locator("td").nth(3)).toHaveText("Unavailable");
+  await expect(rows.nth(2).locator("td").nth(3)).toHaveAttribute("title", /Applicable prices cover 50%/);
+  await expect(rows.nth(3).locator("td").nth(3)).toHaveText("Unavailable");
+  await expect(rows.nth(4).locator("td").nth(3)).toHaveText("Pricing disabled");
+  await expect(page.locator("#days-status")).toContainText("some applicable household rates are missing");
+  await expect(page.locator("#days-status")).toContainText("No observed energy is available to price");
+  await page.setViewportSize({ width: 375, height: 812 });
+  const box = await page.locator("#daily-peaks").boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+  expect(await page.locator("#daily-peaks .table-scroll").evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
 });

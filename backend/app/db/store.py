@@ -102,6 +102,8 @@ class Store:
                         "005_six_kw_threshold.sql",
                         "006_tariff_pricing.sql",
                         "007_requested_recovery.sql",
+                        "008_ev_bonus_rates.sql",
+                        "009_daily_recovery.sql",
                     )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
@@ -171,6 +173,7 @@ class Store:
         async with self.write() as conn:
             config = dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
             previous_identity = (config["account_number"], config["active_device_id"])
+            previous_ev_source = (config["home_assistant_url"], config["home_assistant_entity"])
             if config["revision"] != update.expected_revision:
                 raise Conflict("Settings changed; reload before saving")
             for field in update.model_fields_set - {"expected_revision"}:
@@ -209,6 +212,19 @@ class Store:
                 config[x] for x in ("octopus_api_key", "account_number", "active_device_id")
             ):
                 raise ValueError("An API key, account and meter are required for tariff pricing")
+            if config["ev_savings_from"] and not all(
+                config[x]
+                for x in ("home_assistant_url", "home_assistant_entity", "active_device_id")
+            ):
+                raise ValueError(
+                    "Configure the Ohme power source and meter before enabling bonus rates"
+                )
+            if (
+                previous_identity != (config["account_number"], config["active_device_id"])
+                or previous_ev_source
+                != (config["home_assistant_url"], config["home_assistant_entity"])
+            ) and "ev_savings_from" not in update.model_fields_set:
+                config["ev_savings_from"] = None
             if config["active_device_id"]:
                 if not config["account_number"]:
                     raise ValueError("An account is required for the selected device")
@@ -226,7 +242,7 @@ class Store:
                 "UPDATE app_config SET revision=revision+1,account_number=?,active_device_id=?,"
                 "octopus_api_key=?,polling_enabled=?,poll_interval_seconds=?,display_timezone=?,"
                 "home_assistant_url=?,home_assistant_token=?,home_assistant_entity=?,home_assistant_enabled=?,"
-                "tariff_pricing_enabled=?,updated_at_us=? WHERE singleton=1",
+                "tariff_pricing_enabled=?,ev_savings_from=?,updated_at_us=? WHERE singleton=1",
                 tuple(
                     config[x]
                     for x in (
@@ -241,6 +257,7 @@ class Store:
                         "home_assistant_entity",
                         "home_assistant_enabled",
                         "tariff_pricing_enabled",
+                        "ev_savings_from",
                     )
                 )
                 + (now_us(),),
@@ -494,28 +511,78 @@ class Store:
             end = min(end, at - 180_000_000)
             if not 0 <= start < end:
                 raise ValueError("Select a historical range ending at least three minutes ago")
-            async with conn.execute(
-                "SELECT * FROM recovery_state WHERE device_id=?", (device,)
-            ) as cur:
-                previous = await cur.fetchone()
-            if previous and previous["status"] in ("pending", "paused"):
-                start = min(
-                    start,
-                    max(
-                        int(previous["cursor_us"]),
-                        retained["raw_before_us"],
-                        at - self.policy.raw_days * DAY_US,
-                    ),
-                )
-                end = max(end, int(previous["target_us"]))
-            await conn.execute(
-                "INSERT INTO recovery_state(device_id,cursor_us,target_us,status,requested) "
-                "VALUES(?,?,?,'pending',1) ON CONFLICT(device_id) DO UPDATE SET "
-                "cursor_us=excluded.cursor_us,target_us=excluded.target_us,status='pending',"
-                "requested=1,error_code=NULL",
-                (device, start, end),
-            )
+            start, end = await self._queue_recovery(conn, device, start, end, retained, at)
         return {"device_id": device, "from": iso(start), "to": iso(end), "state": "pending"}
+
+    async def schedule_daily_recovery(
+        self,
+        device: str,
+        day: str,
+        start: int,
+        end: int,
+        revision: int,
+        at: int,
+    ) -> bool:
+        async with self.write() as conn:
+            config = await one(conn, "SELECT * FROM app_config WHERE singleton=1")
+            if (
+                config["revision"] != revision
+                or not config["polling_enabled"]
+                or config["active_device_id"] != device
+            ):
+                return False
+            async with conn.execute(
+                "SELECT last_day FROM daily_recovery_schedule WHERE device_id=?", (device,)
+            ) as cur:
+                previous_day = await cur.fetchone()
+            if previous_day and previous_day["last_day"] >= day:
+                return False
+
+            retained = await self.retention(conn, device)
+            earliest = max(
+                at - min(self.policy.raw_days, 31) * DAY_US,
+                retained["raw_before_us"],
+            )
+            start = max(start, earliest)
+            end = min(end, at - 180_000_000)
+            if start < end:
+                start, end = await self._queue_recovery(conn, device, start, end, retained, at)
+            await conn.execute(
+                "INSERT INTO daily_recovery_schedule VALUES(?,?) "
+                "ON CONFLICT(device_id) DO UPDATE SET last_day=excluded.last_day",
+                (device, day),
+            )
+            return start < end
+
+    async def _queue_recovery(
+        self,
+        conn: aiosqlite.Connection,
+        device: str,
+        start: int,
+        end: int,
+        retained: dict[str, Any],
+        at: int,
+    ) -> tuple[int, int]:
+        async with conn.execute("SELECT * FROM recovery_state WHERE device_id=?", (device,)) as cur:
+            previous = await cur.fetchone()
+        if previous and previous["status"] in ("pending", "paused"):
+            start = min(
+                start,
+                max(
+                    int(previous["cursor_us"]),
+                    retained["raw_before_us"],
+                    at - self.policy.raw_days * DAY_US,
+                ),
+            )
+            end = max(end, int(previous["target_us"]))
+        await conn.execute(
+            "INSERT INTO recovery_state(device_id,cursor_us,target_us,status,requested) "
+            "VALUES(?,?,?,'pending',1) ON CONFLICT(device_id) DO UPDATE SET "
+            "cursor_us=excluded.cursor_us,target_us=excluded.target_us,status='pending',"
+            "requested=1,error_code=NULL",
+            (device, start, end),
+        )
+        return start, end
 
     async def recovery(self, device: str) -> dict[str, Any] | None:
         async with (
@@ -610,9 +677,13 @@ class Store:
                 )
             )[0]
         return {
+            "recovery_state": row["status"] if row else "idle",
             "recovery_pending": bool(row and row["status"] == "pending"),
             "recovery_cursor_at": iso(row["cursor_us"]) if row else None,
             "recovery_target_at": iso(row["target_us"]) if row else None,
+            "recovery_last_progress_at": iso(row["last_attempt_us"])
+            if row and row["last_attempt_us"] is not None
+            else None,
             "recovery_gap_count": int(gaps),
             "recovery_error": row["error_code"] if row else None,
             "recovery_incomplete": bool(gaps or (row and row["status"] != "complete")),

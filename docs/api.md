@@ -38,6 +38,13 @@ nonempty string replaces it; null clears it only with EV collection disabled.
 the token itself. Changing URL, entity or meter selects a separate EV history
 identity; token rotation does not discard that history.
 
+Optional `ev_savings_from` is a validated `YYYY-MM-DD` date or null (default).
+Setting it confirms all Ohme charging from that Europe/London date uses
+Intelligent Octopus Go Prioritise Savings, never Max/Boost or charging beyond
+the allowance. It requires a configured power URL/entity and meter. Null disables
+bonus inference. Account/meter or EV URL/entity changes clear it unless it is
+explicitly supplied again in the update. It does not enable collection or pricing.
+
 The Home Assistant test returns `power_w`, `reported_at`, `fresh`,
 `history_available` and `warnings`. It shares the local 45-second connectivity
 test cooldown. Only read-only requests are sent to the configured host, redirects
@@ -92,8 +99,26 @@ current tariff name/code/schedule, household rate intervals covering the next
 Optional paired `from`/`to` parameters request cached intervals overlapping a
 historical graph range instead (at most 3653 days). Optional `device_id` prevents
 the active tariff from being applied to another meter; a mismatch has no rates.
-These reads do not fetch upstream data or enable pricing. The graph shades only
-returned household `ECO7_NIGHT` intervals, never inferring uncached off-peak times.
+These reads do not fetch upstream data or enable pricing. The graph shades
+returned household `ECO7_NIGHT` and separately styled estimated `EV_BONUS`
+intervals, never inferring uncached prices.
+
+When `ev_savings_from` is set, the shared effective-rate resolver overlays whole
+settlement half-hours earned by recorded positive charger power, under that
+explicit assumption. Complete known-zero EV coverage retains an ordinary daytime
+rate. Unknown daytime eligibility is omitted from `rates`, never silently
+represented by the published day price. Other tariffs and dates before activation
+keep their published schedules.
+
+Additional response fields are `adjustment_enabled`, `pricing_revision`,
+`ev_coverage_pct` (nullable valid-EV-duration percentage over the relevant tariff
+span), `charging` and `unresolved`. The last two are arrays of RFC3339 `from`/`to`
+intervals clipped to the query. `charging` contains actual observed events;
+`EV_BONUS` rate intervals contain their awarded household periods. A charge
+outside the query can establish its rate because the full settlement half-hour
+is examined. `unresolved` includes missing EV evidence and inferred bonuses
+without dated night prices. Neither future plans nor a known-zero partial slot
+guarantee the eventual peak price. Warnings explain assumptions and missing data.
 
 `POST /api/tariff/refresh` accepts `{"expected_revision": N}` and uses only saved
 Octopus credentials, account and meter. Fetching does not enable pricing or meter
@@ -106,7 +131,9 @@ payment-method-specific feeds, missing rates and upstream errors.
 
 Enabled pricing refreshes every six hours independently of meter collection.
 It caches dated household rates over `min(raw_retention_days,31)` days back and
-two days ahead. Historical agreements are respected. Cache replacement is atomic
+two days ahead, including underlying dated night prices for bonus overlays.
+Fetch again after upgrading an older cache to obtain these underlying prices.
+Historical agreements are respected. Cache replacement is atomic
 and revision-fenced; failed refreshes preserve the previous cache for intervals
 it actually covers. Account/meter changes invalidate it; key rotation does not.
 
@@ -119,6 +146,13 @@ Each snapshot contains:
 - `device_id`, `data_version`.
 - Nullable `reading`: native `read_at`, signed `demand_w`, nonnegative `import_demand_w`, cumulative `consumption_kwh`, quality.
 - `health`: collector state, native telemetry freshness, storage state, latest successful API contact, latest reading time, next retry, consecutive failures and sanitized error code.
+- Recovery health additionally exposes `recovery_state` (`idle`, `pending`,
+  `paused` or `complete`), `recovery_active` (a historical worker request is
+  currently in flight), cursor/target, `recovery_last_progress_at` (the latest
+  completed or locally skipped chunk), unresolved-window count and recovery
+  error. Completion/progress persist across restarts; active work is process-local.
+  A complete pass can still have unresolved windows. Storage recovery health
+  contains the persistent fields; live snapshots also include `recovery_active`.
 - `home_assistant`: independent EV collector state, `power_w`, `reported_at`,
   latest success/retry, sanitized `error_code` and optional backfill cursor.
 
@@ -133,16 +167,20 @@ omission selects the active meter. No cross-meter aggregation occurs.
 Both endpoints accept `exclude_ev=true` (default false). This subtracts the
 configured Ohme power history before energy/threshold calculations and uses
 joint meter/EV coverage. Missing EV data does not fall back to grid-only values.
+The sixty seconds before and after each recorded, known charging start/stop are
+also unsupported to allow for asynchronous meter/Ohme updates. Adjusted peaks,
+energy, threshold totals and costs omit these periods and coverage is reduced;
+whole-meter analytics and original bonus-rate eligibility evidence are unchanged.
 It is available only for the configured active meter, ranges no longer than raw
 retention, and boundaries not older than the raw retention watermark. Unsupported
 ranges return 422 with an explicit message. The unadjusted endpoint retains all
 existing archive behavior.
 
 Adjusted responses use `method.power_basis=nonnegative_grid_import_excluding_ev`
-and `integration=meter_previous_sample_hold_minus_recorded_ev_state_hold`.
+and `integration=meter_previous_sample_hold_minus_recorded_ev_state_hold_with_start_stop_gaps`.
 Daily metrics, chart means, derived peaks and trailing demand all use this basis.
 The unchanged live reading remains grid import. Responses warn about recorded-
-state estimation and unreported Home Assistant outages.
+state estimation, transition gaps and unreported Home Assistant outages.
 
 `GET /api/analytics/summary` additionally accepts `timezone` (default `Europe/London`). It returns observed/requested duration, coverage, estimated import kWh, sampled peak/time, local daily peaks and a single 6 kW threshold:
 
@@ -161,7 +199,8 @@ This example represents two fully observed minutes at 8 kW. Null estimates mean 
 `GET /api/analytics/daily-peaks` accepts `to`, `timezone`, optional `device_id`
 and `exclude_ev`, using the same authentication and analytical query lane.
 It returns `device_id`, actual `from`/`to`, `timezone`, five `daily_peaks` rows
-with the existing daily-metrics shape, and `warnings`. These are the five calendar
+with the existing daily-metrics shape plus a per-row `pricing` estimate, and
+`warnings`. These are the five calendar
 dates ending at the exclusive `to`; a midnight end includes the preceding day,
 not an empty next day. The latest date can be partial. Archived grid resolution
 may expand it to a whole day. Missing/expired EV history yields unavailable days
@@ -170,13 +209,73 @@ first independently of its selected duration.
 
 The summary also contains `pricing`: `enabled`, `available`,
 `energy_when_above_gbp`, `excess_energy_gbp`, `price_coverage_pct`,
-`priced_seconds_above`, `fetched_at` and `warning`. Monetary values are GBP,
+`priced_seconds_above`, `fetched_at`, `warning` and nullable `pricing_revision`. Monetary values are GBP,
 using household import rates including VAT and the selected grid/EV-excluded
 basis. Both are null unless every observed above-threshold interval is priced.
 No observed duration also yields null. Observed periods without exceedance can
 legitimately cost zero. Price coverage is above-threshold duration coverage, not
-overall meter/EV coverage. Standing charges, EV-specific billing adjustments and
-account-specific discounts are excluded; exceeding 6 kW is not itself a penalty.
+overall meter/EV coverage. Unknown bonus eligibility counts as missing applicable
+pricing, not an assumed peak rate. `pricing_revision` combines the configuration
+revision, meter/EV data version and tariff fetch timestamp; where present it
+matches `/api/tariff` for the same snapshot. The browser retries mismatched
+cost/history/indicator revisions. Standing charges and account-specific discounts
+are excluded; supplier-specific EV billing adjustments are not independently
+verified. Exceeding 6 kW is not itself a penalty.
+
+### Calendar-day detail
+
+`GET /api/analytics/day?date=YYYY-MM-DD&timezone=Europe/London` accepts optional
+`device_id` and `exclude_ev` (default false). It uses the same authentication,
+analytical query lane and timeout as the other analytics endpoints. Invalid
+dates/timezones, future dates and days before the supported epoch return 422.
+The date describes a local calendar day, including 23/25-hour DST days; today
+ends at request time. `calendar_to` retains the actual next local midnight.
+Daily archives use their recorded calendar timezone, reported explicitly if it
+differs from the requested timezone.
+
+One read transaction supplies `grid` and nullable `adjusted` summaries,
+the selected-basis `history`, nullable `grid_history` for an EV-excluded chart
+reference, `tariff`, original positive-power `charging` periods, `meter_gaps` and
+derived `transition_gaps`. Chart gap ranges are not truncated with the event log.
+Configuration, telemetry and cached-price reads share the
+same SQLite snapshot. `date`, `today`, `timezone`, `from`, `to`, `calendar_to`,
+`partial`, `device_id`, `data_version` and `config_revision` identify that snapshot.
+`ev_savings_from` gives its configured policy date, not a later configuration read.
+`exclude_ev` reports the basis actually returned. When EV analysis is not
+configured or raw history has expired, `adjusted` is null,
+`ev_unavailable_reason` explains why, and grid analysis remains available rather
+than masquerading as non-EV data.
+
+`coverage` gives `meter_seconds`, nullable `ev_seconds`, `joint_seconds` (before
+guards), and `adjusted_seconds` (after guards). EV coverage describes the
+requested day, separately from tariff eligibility coverage and price coverage.
+`peak_overlaps_ev` is true/false only when an original known EV state covers the
+selected peak timestamp; otherwise it is null, not an assertion of no charging.
+Overlap does not prove that charging caused the whole peak.
+
+`events` includes at most 200 chronological `meter_gap`, `ev_gap`,
+`ev_transition` and selected-basis `exceedance` periods, each with `from`, `to`
+and nullable `peak_w`. `event_count` exposes truncation. Exceedance episodes
+join contiguous supported segments strictly above 6 kW; unsupported time breaks
+them. No episode bridges a missing period. Archived events are not reconstructed;
+`raw_available` and `warnings` explain their absence.
+`recovery_available` indicates whether this active-meter day is eligible for the
+existing `POST /api/recovery` action. It never starts polling or recovers Ohme
+history, and mutations still enforce their normal revision and eligibility checks.
+
+All metrics are observed-period results, not full-day projections or a bill.
+Frontend day links use `#day/YYYY-MM-DD/{demand|ev|coverage}` with meter, calendar
+timezone and EV basis in their query string. The pages are fixed snapshots until
+manually refreshed; navigation preserves the overview range and scroll position
+within the current document.
+
+Each `/api/analytics/daily-peaks` row's `pricing` has the same fields and
+availability rules as the summary estimate, calculated independently over that
+row's actual calendar-day bounds. It prices both all energy while demand exceeds
+6 kW and only the excess beyond 6 kW, not a daily 6 kWh allowance. A missing rate
+on one day does not suppress another day's fully priced estimate. Disabled
+pricing, inactive meters, missing observations and insufficient retained detail
+retain explicit per-row explanations.
 
 `GET /api/analytics/history` additionally accepts `interval=auto|1m|5m|15m|30m|1h|6h|1d` and `max_points` (default 1,500, maximum 4,000). An explicit interval that cannot fit the output bound returns 422, rather than silently changing it.
 

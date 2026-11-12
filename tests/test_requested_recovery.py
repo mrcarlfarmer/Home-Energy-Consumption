@@ -1,14 +1,17 @@
+import asyncio
+import contextlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from app.analytics.service import Analytics
+from app.api_models import Snapshot
 from app.db.store import Conflict, Store, one
 from app.kraken import Kraken, KrakenError
 from app.main import create_app
 from app.models import ConfigUpdate, iso, now_us, timestamp_us
-from app.poller import Poller
+from app.poller import Poller, daily_recovery_window
 from app.settings import Settings
 from app.storage import DAY_US
 from app.streaming import Hub
@@ -79,15 +82,89 @@ async def test_requested_history_survives_restart_and_automatic_lookback(store: 
     await store.plan_recovery(DEVICE, at, at - 10_000_000)
     state = await store.recovery(DEVICE)
     assert state["cursor_us"] == start and state["requested"] == 1
+    health = await store.recovery_health(DEVICE)
+    assert health["recovery_state"] == "pending"
+    assert health["recovery_last_progress_at"] is None
     await store.close()
     await store.open()
     assert await store.recovery(DEVICE) == state
+    assert await store.recovery_health(DEVICE) == health
     assert queued["from"] == iso(start)
     # Preserve pending work when another selected range is requested.
     await store.request_recovery(DEVICE, at - 3600_000_000, at, 2)
     merged = await store.recovery(DEVICE)
     assert merged["cursor_us"] == start
     assert at - 180_000_000 <= merged["target_us"] <= now_us() - 180_000_000
+
+
+@pytest.mark.parametrize(
+    ("at", "day", "start", "end"),
+    [
+        (
+            "2026-03-30T00:05:00+01:00",
+            "2026-03-29",
+            "2026-03-29T00:00:00Z",
+            "2026-03-29T23:00:00Z",
+        ),
+        (
+            "2026-10-26T00:05:00Z",
+            "2026-10-25",
+            "2026-10-24T23:00:00Z",
+            "2026-10-26T00:00:00Z",
+        ),
+    ],
+)
+def test_daily_recovery_window_uses_previous_local_day_and_dst(
+    at: str, day: str, start: str, end: str
+) -> None:
+    window = daily_recovery_window(timestamp_us(at), "Europe/London")
+    assert window == (day, timestamp_us(start), timestamp_us(end))
+
+
+def test_daily_recovery_waits_for_local_day_to_settle() -> None:
+    assert daily_recovery_window(timestamp_us("2026-11-12T00:04:59Z"), "Europe/London") is None
+
+
+async def test_daily_recovery_is_persisted_and_scheduled_once(store: Store) -> None:
+    at = timestamp_us("2026-03-30T00:05:00+01:00")
+    day, start, end = daily_recovery_window(at, "Europe/London")
+    assert await store.schedule_daily_recovery(DEVICE, day, start, end, 2, at)
+    state = await store.recovery(DEVICE)
+    assert state is not None
+    assert state["cursor_us"] == start
+    assert state["target_us"] == end
+    assert state["requested"] == 1
+    await store.close()
+    await store.open()
+    assert await store.recovery(DEVICE) == state
+    assert not await store.schedule_daily_recovery(DEVICE, day, start, end, 2, at)
+    assert await store.recovery(DEVICE) == state
+    async with store.read() as conn:
+        assert (
+            await one(
+                conn,
+                "SELECT last_day FROM daily_recovery_schedule WHERE device_id=?",
+                (DEVICE,),
+            )
+        )[0] == day
+
+
+async def test_live_collection_queues_the_previous_local_day(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = timestamp_us("2026-11-12T00:05:00Z")
+    monkeypatch.setattr("app.poller.now_us", lambda: at)
+    client = Kraken()
+    client.verify = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    client.telemetry = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    try:
+        await Poller(store, client, Hub()).collect(await store.config())
+        state = await store.recovery(DEVICE)
+        assert state is not None
+        assert state["cursor_us"] == timestamp_us("2026-11-11T00:00:00Z")
+        assert state["target_us"] == timestamp_us("2026-11-12T00:00:00Z")
+    finally:
+        await client.close()
 
 
 @pytest.mark.parametrize("problem", ["revision", "meter", "disabled", "expired", "recent"])
@@ -150,6 +227,10 @@ async def test_unavailable_readings_remain_gaps(store: Store, unavailable: str) 
     try:
         await Poller(store, client, Hub()).recover(await store.config())
         assert (await store.recovery(DEVICE))["status"] == "complete"
+        health = await store.recovery_health(DEVICE)
+        assert health["recovery_state"] == "complete"
+        assert health["recovery_last_progress_at"] is not None
+        assert health["recovery_gap_count"] == 1
         async with store.read() as conn:
             gap = await one(conn, "SELECT * FROM recovery_gaps")
             assert gap["reason"] == unavailable
@@ -157,6 +238,89 @@ async def test_unavailable_readings_remain_gaps(store: Store, unavailable: str) 
         assert summary["coverage_pct"] == 0
         assert summary["import_energy_kwh"] is None
     finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "state,reason",
+    [("complete", None), ("complete", "partial"), ("paused", "invalid_telemetry_shape")],
+)
+async def test_recovery_completion_and_pause_feedback_survive_restart(
+    store: Store, state: str, reason: str | None
+) -> None:
+    start = now_us() - 3600_000_000
+    end = start + 900_000_000
+    idle = await store.recovery_health(DEVICE)
+    assert idle["recovery_state"] == "idle"
+    assert idle["recovery_last_progress_at"] is None
+    await store.request_recovery(DEVICE, start, end, 2)
+    if state == "paused":
+        assert reason is not None
+        await store.pause_recovery(DEVICE, 2, reason)
+    else:
+        await store.finish_recovery_chunk(DEVICE, start, end, 2, reason)
+    health = await store.recovery_health(DEVICE)
+    assert health["recovery_state"] == state
+    assert health["recovery_pending"] is False
+    assert health["recovery_error"] == (reason if state == "paused" else None)
+    assert health["recovery_gap_count"] == int(reason == "partial")
+    assert bool(health["recovery_last_progress_at"]) == (state == "complete")
+    await store.close()
+    await store.open()
+    assert await store.recovery_health(DEVICE) == health
+    client = Kraken()
+    poller = Poller(store, client, Hub())
+    try:
+        await poller.publish()
+        snapshot = Snapshot.model_validate(poller.hub.current)
+        assert snapshot.health.recovery_state == state
+        assert snapshot.health.recovery_active is False
+        assert snapshot.health.recovery_last_progress_at == health["recovery_last_progress_at"]
+    finally:
+        await client.close()
+
+
+async def test_worker_publishes_active_recovery_and_then_completed_progress(store: Store) -> None:
+    start = now_us() // 10_000_000 * 10_000_000 - 3600_000_000
+    end = start + 60_000_000
+    await store.request_recovery(DEVICE, start, end, 2)
+    rows = readings(start, 60)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def telemetry(*args: object) -> list[dict[str, object]]:
+        started.set()
+        await finish.wait()
+        return [{"readAt": row.read_at, "demand": 4000} for row in rows]
+
+    client = Kraken()
+    client.telemetry = AsyncMock(side_effect=telemetry)  # type: ignore[method-assign]
+    hub = Hub()
+    queue = hub.subscribe()
+    queue.get_nowait()
+    poller = Poller(store, client, hub)
+    poller.collect = AsyncMock()  # type: ignore[method-assign]
+    task = asyncio.create_task(poller.run())
+    try:
+        async with asyncio.timeout(3):
+            _, queued = await queue.get()
+            assert queued["health"]["recovery_state"] == "pending"
+            assert queued["health"]["recovery_active"] is False
+            poller.changed.set()
+            await started.wait()
+            _, active = await queue.get()
+            assert active["health"]["recovery_active"] is True
+            assert active["health"]["recovery_cursor_at"] == iso(start)
+            finish.set()
+            _, completed = await queue.get()
+            assert completed["health"]["recovery_state"] == "complete"
+            assert completed["health"]["recovery_active"] is False
+            assert completed["health"]["recovery_cursor_at"] == iso(end)
+            assert completed["health"]["recovery_last_progress_at"] is not None
+            assert completed["health"]["recovery_gap_count"] == 0
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
         await client.close()
 
 

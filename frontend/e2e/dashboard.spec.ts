@@ -1,15 +1,23 @@
 import { test, expect } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 
 test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
+  const count = execFileSync("git", ["rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim();
+  const revision = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encoding: "utf8" }).trim();
+  const version = page.getByLabel("Application version", { exact: true });
+  await expect(version).toHaveText(new RegExp(`^Build ${count} \\(${revision}(?:, uncommitted changes)?\\)$`));
+  const displayedVersion = await version.textContent();
   await expect(page.getByText("HTTP connection:", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Username", { exact: true })).toHaveValue("admin");
   await page.getByLabel("Dashboard password").fill("fixture-only-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.locator("#stream-health")).toHaveText("Dashboard connected");
-  await expect(page.locator(".transport-warning")).toContainText("not encrypted in transit");
+  await expect(version).toHaveText(displayedVersion!);
+  await expect(page.locator(".transport-warning")).toHaveCount(0);
+  await expect(page.getByText("HTTP connection:", { exact: false })).toHaveCount(0);
   await expect(page.locator("#demand")).toHaveText("4");
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
   await expect(page.locator("#thresholds tr").first()).toContainText("6 kW");
@@ -19,6 +27,7 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#above-6kw-energy")).toHaveText("0 kWh");
   await expect(page.locator("#above-6kw-excess")).toHaveText("0 kWh");
   await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(version).toBeVisible();
   await expect(page.locator("#key-status")).toContainText("API key saved");
   expect(await page.content()).not.toContain("fixture-only-key");
   await page.getByLabel("Polling interval (seconds)").fill("60");
@@ -32,6 +41,7 @@ test("login, real SSE, charts, configuration and logout", async ({ page }) => {
   await expect(page.locator("#analysis-status")).toContainText("Chart buckets: 15 min");
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByLabel("Dashboard password")).toBeVisible();
+  await expect(version).toHaveText(displayedVersion!);
   expect(errors).toEqual([]);
 });
 

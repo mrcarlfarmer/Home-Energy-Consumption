@@ -3,6 +3,47 @@ from dataclasses import dataclass, field
 
 from app.models import GAP_US, THRESHOLDS, EVInterval
 
+EV_TRANSITION_GUARD_US = 60_000_000
+
+
+def ev_exclusion_intervals(intervals: list[EVInterval]) -> list[EVInterval]:
+    """Leave a polling period plus a meter hold unknown around charging start/stop."""
+    guards: list[tuple[int, int]] = []
+    for before, after in zip(intervals, intervals[1:], strict=False):
+        if (
+            before.end != after.start
+            or before.power_mw is None
+            or after.power_mw is None
+            or (before.power_mw > 0) == (after.power_mw > 0)
+        ):
+            continue
+        left = max(0, after.start - EV_TRANSITION_GUARD_US)
+        right = after.start + EV_TRANSITION_GUARD_US
+        if guards and left <= guards[-1][1]:
+            guards[-1] = (guards[-1][0], max(right, guards[-1][1]))
+        else:
+            guards.append((left, right))
+    if not guards:
+        return intervals
+
+    result: list[EVInterval] = []
+    index = 0
+    for ev in intervals:
+        left = ev.start
+        while index < len(guards) and guards[index][1] <= left:
+            index += 1
+        j = index
+        while j < len(guards) and guards[j][0] < ev.end:
+            a, b = max(left, guards[j][0]), min(ev.end, guards[j][1])
+            if left < a:
+                result.append(EVInterval(left, a, ev.power_mw))
+            result.append(EVInterval(a, b, None))
+            left = b
+            j += 1
+        if left < ev.end:
+            result.append(EVInterval(left, ev.end, ev.power_mw))
+    return result
+
 
 @dataclass
 class Metrics:

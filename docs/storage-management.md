@@ -169,6 +169,13 @@ than relying on restarts to cure full/read-only/corrupt storage.
 Collection is started at service startup, not by login or an SSE connection.
 Browser closure, logout and session expiry do not stop it.
 
+The dashboard shows a small animated indicator beside the recovery status while
+requesting or processing recovery. It stops when collection is paused, recovery
+finishes, or the dashboard connection is lost. Reduced-motion preferences replace
+the animation with a static indicator; the dashboard remains usable throughout.
+During upstream retry backoff, the recovery status remains waiting but the
+animation stops until collection can proceed again.
+
 Before live collection, the collector persists a recovery cursor/target per meter.
 On first setup it attempts the configured horizon; following downtime it starts
 from the prior latest sample. Successful live polls and fifteen-minute backfill
@@ -195,6 +202,11 @@ Old-range rejection, empty responses, partial coverage and aged-out work are rec
 explicitly. A chunk's presence does not promise complete coverage. These windows are
 reported as unresolved by this recovery attempt, not proof that upstream data can
 never become available. Rejected/empty/partial chunks are not retried forever.
+The graph displays an animated queued/checking/waiting indicator, the current
+cursor and target, and the last completed-chunk time. It explicitly distinguishes
+paused recovery, a completed pass, and a completed pass with unresolved windows.
+The stored completion state remains visible after reconnecting or reloading.
+Lost live updates are marked unknown, rather than pretending recovery finished.
 No half-hour consumption fallback is fabricated or mixed into demand/peak metrics.
 Storage-paused collection makes no recovery requests until capacity is restored.
 

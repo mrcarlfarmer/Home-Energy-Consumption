@@ -1,17 +1,33 @@
 import asyncio
 import logging
 import random
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 
 from app.db.store import Store, one
 from app.kraken import Kraken, KrakenError
-from app.models import Reading, iso, now_us
+from app.models import Reading, iso, now_us, timestamp_us
 from app.storage import StoragePressure
 from app.streaming import Hub
 
 log = logging.getLogger(__name__)
+
+
+def daily_recovery_window(at: int, timezone: str) -> tuple[str, int, int] | None:
+    local_now = (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=at)).astimezone(
+        ZoneInfo(timezone)
+    )
+    if local_now.hour == 0 and local_now.minute < 5:
+        return None
+    today = local_now.date()
+    yesterday = today - timedelta(days=1)
+    zone = ZoneInfo(timezone)
+    start = datetime.combine(yesterday, time.min, zone)
+    end = datetime.combine(today, time.min, zone)
+    return yesterday.isoformat(), timestamp_us(start.isoformat()), timestamp_us(end.isoformat())
 
 
 class Poller:
@@ -31,6 +47,7 @@ class Poller:
             "consecutive_failures": 0,
             "error_code": None,
             "recovery_incomplete": False,
+            "recovery_active": False,
             "disk_free_bytes": None,
             "database_bytes": None,
             "low_disk": False,
@@ -48,6 +65,12 @@ class Poller:
         config = await self.store.config()
         self.health.update(await self.store.capacity())
         self.health.update(await self.store.recovery_health(config["active_device_id"]))
+        self.health["recovery_active"] = bool(
+            self.health["recovery_pending"]
+            and self.recovery_due
+            and self.inflight is not None
+            and not self.inflight.done()
+        )
         latest = await self.store.latest(config["active_device_id"])
         data_version = 0
         if config["active_device_id"]:
@@ -110,6 +133,12 @@ class Poller:
         self.health["last_attempt_at"] = iso(now_us())
         await self.client.verify(key, config["account_number"], device)
         at = now_us()
+        daily = daily_recovery_window(at, config["display_timezone"])
+        if daily is not None:
+            day, start, end = daily
+            await self.store.schedule_daily_recovery(
+                device, day, start, end, config["revision"], at
+            )
         latest = await self.store.latest(device)
         await self.store.plan_recovery(device, at, latest["read_at_us"] if latest else None)
         start = at - 180_000_000
@@ -174,6 +203,7 @@ class Poller:
             return
         try:
             self.health["last_attempt_at"] = iso(now_us())
+            await self.publish()
             rows = await self.client.telemetry(
                 config["octopus_api_key"],
                 device,

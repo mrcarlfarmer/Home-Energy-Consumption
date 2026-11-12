@@ -1,13 +1,22 @@
 import json
 from bisect import bisect_left, bisect_right
 from collections.abc import AsyncIterator
+from contextlib import nullcontext
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import aiosqlite
 
-from app.analytics.intervals import Metrics, integrate, integrate_without_ev, supported_segments
+from app.analytics.effective_rates import HOUSEHOLD_WARNING, effective_rates
+from app.analytics.intervals import (
+    EV_TRANSITION_GUARD_US,
+    Metrics,
+    ev_exclusion_intervals,
+    integrate,
+    integrate_without_ev,
+    supported_segments,
+)
 from app.analytics.pricing import PricedThreshold
 from app.db.store import Store, one
 from app.home_assistant import ev_source
@@ -34,10 +43,12 @@ METHOD = {
 EV_METHOD = {
     **METHOD,
     "power_basis": "nonnegative_grid_import_excluding_ev",
-    "integration": "meter_previous_sample_hold_minus_recorded_ev_state_hold",
+    "integration": "meter_previous_sample_hold_minus_recorded_ev_state_hold_with_start_stop_gaps",
 }
 EV_WARNINGS = [
     "EV exclusion is a recorded-state estimate, not total household load",
+    "The 60 seconds before and after recorded EV charging starts/stops are unknown "
+    "because meter and Ohme updates are not synchronized; coverage and costs exclude these periods",
     "Unreported Home Assistant outages may leave stale recorded states; unavailable states are excluded",
 ]
 
@@ -233,6 +244,19 @@ class Analytics:
                     else:
                         yield bucket, self.store.rollup_metrics(row)
 
+    async def ev_exclusion_history(
+        self, conn: aiosqlite.Connection, source: str, start: int, end: int
+    ) -> list[EVInterval]:
+        # Include neighbouring transitions even when they lie outside a bucket/day/query.
+        return ev_exclusion_intervals(
+            await self.store.ev_rows(
+                conn,
+                source,
+                max(0, start - EV_TRANSITION_GUARD_US),
+                end + EV_TRANSITION_GUARD_US,
+            )
+        )
+
     async def aggregate(
         self,
         conn: aiosqlite.Connection,
@@ -245,7 +269,7 @@ class Analytics:
         if source is not None:
             return integrate_without_ev(
                 await self.store.raw_rows(conn, device, start, end),
-                await self.store.ev_rows(conn, source, start, end),
+                await self.ev_exclusion_history(conn, source, start, end),
                 start,
                 end,
             )
@@ -261,12 +285,14 @@ class Analytics:
         timezone: str,
         selected: str | None = None,
         exclude_ev: bool = False,
+        *,
+        connection: aiosqlite.Connection | None = None,
     ) -> dict[str, Any]:
         zone = ZoneInfo(timezone)
         days: list[dict[str, Any]] = []
         total = Metrics()
         budget = [120]
-        async with self.store.read() as conn:
+        async with self.store.read() if connection is None else nullcontext(connection) as conn:
             device, version = await self.device(conn, selected)
             source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, _, warnings = await self.retained_range(
@@ -354,8 +380,10 @@ class Analytics:
                         datetime.combine(date + timedelta(days=1), time(), zone).isoformat()
                     ),
                 )
+                pricing_start = left
                 if source is not None:
                     supported_start = max(left, int(retained["raw_before_us"]))
+                    pricing_start = supported_start
                     m = (
                         await self.aggregate(conn, device, supported_start, right, budget, source)
                         if supported_start < right
@@ -369,6 +397,9 @@ class Analytics:
                         "from": iso(left),
                         "to": iso(right),
                         **describe(m, right - left),
+                        "pricing": await self.price_threshold(
+                            conn, device, pricing_start, right, m, budget, source
+                        ),
                     }
                 )
                 left, date = right, date + timedelta(days=1)
@@ -416,13 +447,17 @@ class Analytics:
         if not total.observed_us:
             result["warning"] = "No observed energy is available to price"
             return result
-        rates = await self.store.tariff_rows(conn, snapshot["source"], start, end)
+        resolved = await effective_rates(self.store, conn, config, device, start, end, snapshot)
+        rates = resolved.rates
+        result["pricing_revision"] = resolved.revision
+        if resolved.adjustment_enabled:
+            result["warning"] = HOUSEHOLD_WARNING + ". " + " ".join(resolved.warnings)
         cost = PricedThreshold()
         if source is not None:
             for left in range(start, end, DAY_US):
                 right = min(end, left + DAY_US)
                 raw = await self.store.raw_rows(conn, device, left, right)
-                ev = await self.store.ev_rows(conn, source, left, right)
+                ev = await self.ev_exclusion_history(conn, source, left, right)
                 cost.add_segments(supported_segments(raw, left, right, ev), rates)
         else:
             retained = await self.store.retention(conn, device)
@@ -460,7 +495,8 @@ class Analytics:
         if not complete:
             result["warning"] = (
                 "Costs unavailable: some observed above-threshold energy lacks applicable "
-                "rates or sufficiently detailed retained readings. " + PRICING_WARNING
+                "rates, EV eligibility evidence or sufficiently detailed retained readings. "
+                + result["warning"]
             )
         return result
 
@@ -472,6 +508,8 @@ class Analytics:
         maximum: int,
         selected: str | None = None,
         exclude_ev: bool = False,
+        *,
+        connection: aiosqlite.Connection | None = None,
     ) -> dict[str, Any]:
         step = interval_for(start, end, interval, maximum)
         series: dict[str, list[float | None]] = {
@@ -491,7 +529,7 @@ class Analytics:
             )
         }
         budget = [120]
-        async with self.store.read() as conn:
+        async with self.store.read() if connection is None else nullcontext(connection) as conn:
             device, version = await self.device(conn, selected)
             source = await self.ev_selection(conn, device, start, end, exclude_ev)
             start, end, retained, warnings = await self.retained_range(conn, device, start, end)
@@ -554,7 +592,7 @@ class Analytics:
                         cache_right = max(b, min(end, a + DAY_US))
                         ev_raw = await self.store.raw_rows(conn, device, cache_left, cache_right)
                         ev_times = [r[0] for r in ev_raw]
-                        ev_intervals = await self.store.ev_rows(
+                        ev_intervals = await self.ev_exclusion_history(
                             conn, source, cache_left, cache_right
                         )
                         ev_starts = [r.start for r in ev_intervals]

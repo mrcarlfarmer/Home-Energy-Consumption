@@ -109,7 +109,7 @@ async def test_upgrade_preserves_six_kw_archives_and_other_data(
         if version == 4:
             assert (await store.config())["home_assistant_token"] == "synthetic-token"
         async with store.read() as conn:
-            assert (await one(conn, "PRAGMA user_version"))[0] == 7
+            assert (await one(conn, "PRAGMA user_version"))[0] == 9
             assert (await one(conn, "PRAGMA integrity_check"))[0] == "ok"
             async with conn.execute("PRAGMA foreign_key_check") as cur:
                 assert await cur.fetchall() == []
