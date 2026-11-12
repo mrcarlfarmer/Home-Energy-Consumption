@@ -243,7 +243,8 @@ with the total count and truncation explained. Peak inspection zooms the chart
 without changing the day totals. Coverage, price availability and recovery
 limitations remain explicit in every view.
 
-The browser plots observed mean and sampled peak only. The history API retains
+The browser plots sampled peak, with EV charging and grid peak references where
+applicable; it does not plot observed mean. The history API retains observed mean and
 trailing 15-minute demand for compatibility: the import integral over the
 previous 900 seconds divided by 900, evaluated at each chart bucket's end.
 A full-window value requires 100% supported coverage; otherwise it is null.

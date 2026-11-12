@@ -32,8 +32,7 @@ export class DemandChart {
   ): void {
     this.plot?.destroy();
     const s = history.series;
-    // Incomplete bucket means are not drawn as a fully supported continuous curve.
-    const means = s.mean_import_w.map((value, i) => s.coverage_pct[i] === 100 ? value : null);
+    // Incomplete EV bucket means are not drawn as a fully supported continuous curve.
     const evMeans = s.mean_ev_w.map((value, i) => s.ev_coverage_pct[i] === 100 ? value : null);
     const hasEV = s.mean_ev_w.some(value => value !== null);
     const theme = getComputedStyle(this.target);
@@ -118,7 +117,6 @@ export class DemandChart {
       series: [
         { label: "Bucket end", ...(context.timezone ? { value: (_plot: uPlot, value: number) =>
           value == null ? "--" : new Date(value * 1000).toLocaleString(undefined, { timeZone: context.timezone, timeZoneName: "short" }) } : {}) },
-        { label: "Observed mean (W)", stroke: color("--chart-mean"), width: 2, spanGaps: false },
         { label: "Sampled peak (W)", stroke: color("--chart-peak"), width: 1, spanGaps: false },
         ...(hasEV ? [{ label: "EV charging (W)", stroke: color("--chart-ev"), width: 2, spanGaps: false }] : []),
         ...(context.grid ? [{ label: "Grid peak reference (W)", stroke: color("--muted"), width: 1, dash: [3, 3], spanGaps: false }] : []),
@@ -132,7 +130,7 @@ export class DemandChart {
           ? hasEV ? "Non-EV / EV power (W)" : "Non-EV grid import (W)"
           : hasEV ? "Grid / EV power (W)" : "Grid import (W)", size: 65 },
       ],
-    }, [s.bucket_end_epoch_s, means, s.sampled_peak_w,
+    }, [s.bucket_end_epoch_s, s.sampled_peak_w,
       ...(hasEV ? [evMeans] : []),
       ...(context.grid ? [context.grid.series.sampled_peak_w] : [])], this.target);
   }

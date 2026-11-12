@@ -90,6 +90,8 @@ test("dragging pins the selected dates across refreshes and EV-basis changes", a
 
 test("EV charging power remains visible in both analysis views", async ({ page }) => {
   await page.goto("/");
+  await expect(page.locator("#chart .u-legend")).toContainText("Sampled peak (W)");
+  await expect(page.locator("#chart .u-legend")).not.toContainText("Observed mean");
   await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
   const gridResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
   await page.getByRole("button", { name: "1 hour", exact: true }).click();
@@ -103,6 +105,8 @@ test("EV charging power remains visible in both analysis views", async ({ page }
   expect(nonEV.series.ev_coverage_pct).toEqual(grid.series.ev_coverage_pct);
   expect(nonEV.series.mean_import_w).toContain(1000);
   expect(grid.series.mean_import_w).toContain(8000);
+  await expect(page.locator("#chart .u-legend")).toContainText("Sampled peak (W)");
+  await expect(page.locator("#chart .u-legend")).not.toContainText("Observed mean");
   await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
   await expect(page.locator("#ev-chart-status")).toContainText("both analysis views");
   await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).uncheck();

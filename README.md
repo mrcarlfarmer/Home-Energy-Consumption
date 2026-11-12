@@ -54,8 +54,8 @@ Dragging across the graph selects a custom fixed window and updates **From** and
 **To**. Auto-refresh, manual refresh and the EV toggle keep that selected window.
 
 **Exclude EV charging** is a toggle: off shows whole-meter grid import; on uses
-joint meter/Home Assistant data. The graph shows observed mean and sampled peak,
-without the trailing fifteen-minute curve. A dashed **6 kW** reference appears
+joint meter/Home Assistant data. The graph shows sampled peak,
+without the observed-mean or trailing fifteen-minute curves. A dashed **6 kW** reference appears
 when within the visible power scale. Shading identifies API-defined household
 off-peak intervals and, when configured, estimated EV bonus half-hours. Separate
 strips identify observed charging and unresolved rates. Expand **EV charging and
