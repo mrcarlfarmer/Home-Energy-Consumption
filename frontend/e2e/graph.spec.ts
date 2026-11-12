@@ -1,6 +1,113 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test.use({ baseURL: "http://127.0.0.1:8767" });
+
+async function injectSnapshots(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.EventSource = class extends Native {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options);
+        window.addEventListener("fixture-snapshot", event => {
+          this.dispatchEvent(new MessageEvent("snapshot", { data: (event as CustomEvent<string>).detail }));
+        });
+      }
+    };
+  });
+}
+
+test("dragging pins the selected dates across refreshes and EV-basis changes", async ({ page }) => {
+  await injectSnapshots(page);
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto("/");
+  await expect(page.locator("#days tr")).toHaveCount(5);
+  await page.getByRole("button", { name: "1 hour", exact: true }).click();
+  await expect(page.locator("#chart .u-over")).toBeVisible();
+  const initialFrom = new Date(await page.locator("#from").inputValue()).getTime();
+  const initialTo = new Date(await page.locator("#to").inputValue()).getTime();
+  const drag = async (left: number, right: number) => {
+    await page.locator("#chart .u-over").scrollIntoViewIfNeeded();
+    const box = (await page.locator("#chart .u-over").boundingBox())!;
+    const loaded = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
+    await page.mouse.move(box.x + box.width * left, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * right, box.y + box.height / 2, { steps: 10 });
+    await page.mouse.up();
+    const url = new URL((await loaded).url());
+    await expect(page.locator("#chart .u-over")).toBeVisible();
+    return [url.searchParams.get("from")!, url.searchParams.get("to")!];
+  };
+  const selected = await drag(0.25, 0.75);
+  const selectedFrom = new Date(selected[0]).getTime(), selectedTo = new Date(selected[1]).getTime();
+  expect(selectedFrom).toBeGreaterThan(initialFrom);
+  expect(selectedTo).toBeLessThan(initialTo);
+  expect(selectedTo - selectedFrom).toBeCloseTo((initialTo - initialFrom) / 2, -4);
+  await expect(page.locator("#window-mode")).toHaveText("Fixed window");
+  await expect(page.locator('[data-minutes][aria-pressed="true"]')).toHaveCount(0);
+  expect(new Date(await page.locator("#from").inputValue()).toISOString()).toBe(selected[0]);
+  expect(new Date(await page.locator("#to").inputValue()).toISOString()).toBe(selected[1]);
+
+  const expectWindow = async (action: () => Promise<unknown>, dates = selected) => {
+    const loaded = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
+    await action();
+    const url = new URL((await loaded).url());
+    expect([url.searchParams.get("from"), url.searchParams.get("to")]).toEqual(dates);
+    await expect(page.locator("#chart .u-over")).toBeVisible();
+    return url;
+  };
+  const evURL = await expectWindow(() => page.getByRole("switch", { name: "Exclude EV charging", exact: true }).check());
+  expect(evURL.searchParams.get("exclude_ev")).toBe("true");
+  await expectWindow(() => page.getByRole("button", { name: "Refresh graph", exact: true }).click());
+  const config = await (await page.request.get("/api/config")).json();
+  await page.clock.setFixedTime(new Date(await page.evaluate(() => Date.now()) + 61000));
+  await expectWindow(() => page.evaluate(device_id => window.dispatchEvent(new CustomEvent("fixture-snapshot", {
+    detail: JSON.stringify({
+      device_id, data_version: 10001,
+      reading: { read_at: new Date().toISOString(), demand_w: 5000 },
+      health: { polling_state: "running", telemetry_state: "fresh", storage_state: "ok", recovery_pending: false },
+    }),
+  })), config.active_device_id));
+  await expect(page.locator("#window-mode")).toHaveText("Fixed window");
+
+  await page.getByRole("switch", { name: "Auto-refresh graph", exact: true }).uncheck();
+  const nested = await drag(0.2, 0.8);
+  expect(new Date(nested[0]).getTime()).toBeGreaterThan(selectedFrom);
+  expect(new Date(nested[1]).getTime()).toBeLessThan(selectedTo);
+  await expectWindow(() => page.getByRole("switch", { name: "Auto-refresh graph", exact: true }).check(), nested);
+  const shifted = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
+  await page.getByRole("button", { name: "Previous time window", exact: true }).click();
+  const shiftedURL = new URL((await shifted).url());
+  expect(shiftedURL.searchParams.get("to")).toBe(nested[0]);
+  expect(new Date(shiftedURL.searchParams.get("from")!).getTime()).toBe(
+    2 * new Date(nested[0]).getTime() - new Date(nested[1]).getTime(),
+  );
+  await page.getByRole("button", { name: "1 hour", exact: true }).click();
+  await expect(page.locator("#window-mode")).toHaveText("Latest window");
+  expect(errors).toEqual([]);
+});
+
+test("EV charging power remains visible in both analysis views", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
+  const gridResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
+  await page.getByRole("button", { name: "1 hour", exact: true }).click();
+  await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
+  const grid = await (await gridResponse).json();
+  expect(grid.series.mean_ev_w).toContain(7000);
+  const loaded = page.waitForResponse(response => new URL(response.url()).pathname === "/api/analytics/history");
+  await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).check();
+  const nonEV = await (await loaded).json();
+  expect(nonEV.series.mean_ev_w).toEqual(grid.series.mean_ev_w);
+  expect(nonEV.series.ev_coverage_pct).toEqual(grid.series.ev_coverage_pct);
+  expect(nonEV.series.mean_import_w).toContain(1000);
+  expect(grid.series.mean_import_w).toContain(8000);
+  await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
+  await expect(page.locator("#ev-chart-status")).toContainText("both analysis views");
+  await page.getByRole("switch", { name: "Exclude EV charging", exact: true }).uncheck();
+  await expect(page.locator("#chart .u-legend")).toContainText("EV charging (W)");
+  await expect(page.locator("#peak")).toHaveText("8 kW");
+});
 
 test("12-hour and custom windows move by their exact width and show five expanded daily peaks", async ({ page }) => {
   const errors: string[] = [];
@@ -58,17 +165,7 @@ test("12-hour and custom windows move by their exact width and show five expande
 });
 
 test("pausing graph refresh preserves its canvas and dates while live snapshots continue", async ({ page }) => {
-  await page.addInitScript(() => {
-    const Native = window.EventSource;
-    window.EventSource = class extends Native {
-      constructor(url: string | URL, options?: EventSourceInit) {
-        super(url, options);
-        window.addEventListener("fixture-snapshot", event => {
-          this.dispatchEvent(new MessageEvent("snapshot", { data: (event as CustomEvent<string>).detail }));
-        });
-      }
-    };
-  });
+  await injectSnapshots(page);
   let historyRequests = 0;
   page.on("request", request => {
     if (new URL(request.url()).pathname === "/api/analytics/history") historyRequests++;
@@ -127,6 +224,8 @@ test("off-peak shading uses the selected cached tariff window and the 6 kW line 
       value === null ? null : highPeak ? 8000 : 2000);
     history.series.mean_import_w = history.series.mean_import_w.map((value: number | null) =>
       value === null ? null : highPeak ? 8000 : 2000);
+    history.series.mean_ev_w = history.series.mean_ev_w.map((value: number | null) =>
+      value === null ? null : highPeak ? 2000 : 1000);
     await route.fulfill({ response, json: history });
   });
   const queriedWindows: string[][] = [];

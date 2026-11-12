@@ -49,6 +49,8 @@ The **<** and **>** buttons move backward/forward by exactly the selected window
 duration, including custom ranges. Navigation fixes the dates, so subsequent
 automatic updates do not jump back to now. Forward navigation cannot move beyond
 the current time; choose a preset to return to a live-following window.
+Dragging across the graph selects a custom fixed window and updates **From** and
+**To**. Auto-refresh, manual refresh and the EV toggle keep that selected window.
 
 **Exclude EV charging** is a toggle: off shows whole-meter grid import; on uses
 joint meter/Home Assistant data. The graph shows observed mean and sampled peak,
@@ -56,6 +58,11 @@ without the trailing fifteen-minute curve. A dashed **6 kW** reference appears
 when within the visible power scale. Shading identifies API-defined household
 off-peak intervals that overlap the view, using cached tariff pricing; missing
 or older tariff periods are not guessed. Fetch rates in Settings first.
+
+An amber **EV charging (W)** line shows recorded Home Assistant mean power for
+the active meter, whether EV exclusion is on or off. It is independent of meter
+coverage. Missing or incomplete EV buckets are gaps, not zero; expired EV
+history is unavailable. The line appears when the window contains EV readings.
 
 **Daily sampled peaks** is always expanded and shows five calendar days ending
 at the viewed window, newest first, independently of the graph's duration.

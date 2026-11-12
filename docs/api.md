@@ -182,6 +182,14 @@ account-specific discounts are excluded; exceeding 6 kW is not itself a penalty.
 
 History returns equal-length columnar arrays: bucket start/end Unix seconds, observed-time mean W, sampled peak W/time, trailing 15-minute W, observed duration, bucket coverage and rolling-window coverage. Missing values are null. Recent buckets are UTC aligned; fixed `1d` chart buckets are distinct from local-calendar daily peaks.
 
+`series.mean_ev_w` and `series.ev_coverage_pct` are aligned to those same buckets
+in both grid and EV-excluded responses. EV mean power is duration-weighted over
+available recorded Home Assistant intervals, independently of meter coverage;
+coverage uses the full bucket duration. Missing EV states, expired raw history,
+an unconfigured EV source or a non-active meter produce null means and zero
+coverage, not inferred zero consumption. Partial coverage is reported explicitly;
+the browser draws EV means only for fully covered buckets.
+
 Expired raw data requires at least five-minute resolution. Daily archives require
 `auto`/`1d` and the frozen archive calendar timezone for summaries. Responses expand
 endpoints to retained boundaries, report actual `from`/`to`, and include warnings.

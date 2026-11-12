@@ -205,6 +205,12 @@ function setRange(minutes: number): void {
   const end = new Date();
   setWindow(new Date(end.getTime() - minutes * 60000), end);
 }
+function setCustomWindow(from: Date, to: Date): void {
+  selectedMinutes = 0; followLatest = false;
+  setWindow(from, to);
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) button.setAttribute("aria-pressed", "false");
+  clearMessage(); void refresh();
+}
 function shiftWindow(direction: number): void {
   const span = viewRange.to.getTime() - viewRange.from.getTime();
   const to = new Date(viewRange.to.getTime() + direction * span);
@@ -217,7 +223,7 @@ function shiftWindow(direction: number): void {
 function fillAutoRefresh(): void {
   element<HTMLInputElement>("graph-auto-refresh").checked = autoRefresh;
   text("graph-refresh-status", autoRefresh
-    ? "Graph auto-refresh is on. Window arrows keep historical dates fixed; presets return to the latest window."
+    ? "Graph auto-refresh is on. Dragging or window arrows keep selected dates fixed; presets return to the latest window."
     : "Graph auto-refresh is off. Live readings and meter polling continue unchanged; use Refresh graph to update this view.");
 }
 async function refresh(automatic = false): Promise<void> {
@@ -323,6 +329,9 @@ async function refresh(automatic = false): Promise<void> {
       ]) row.insertCell().textContent = value;
     }
     text("off-peak-status", tariffNote);
+    text("ev-chart-status", history.series.mean_ev_w.some(value => value !== null)
+      ? "EV charging shows recorded Home Assistant mean power in both analysis views. Incomplete EV buckets are gaps, not zero."
+      : "EV charging line unavailable for this meter/window. Configure Home Assistant for the active meter and select retained EV history.");
     chart?.update(history, rates);
     lastRefresh = Date.now();
   } catch (error) {
@@ -468,6 +477,7 @@ async function renderDashboard(): Promise<void> {
     <div id="chart" aria-label="Demand history chart"></div>
     <div class="chart-indicators" aria-label="Visible chart indicators"><span id="off-peak-key" class="off-peak-key" hidden>Household off-peak slot</span><span id="threshold-key" class="threshold-key" hidden>6 kW threshold</span></div>
     <p id="off-peak-status" class="note"></p>
+    <p id="ev-chart-status" class="note"></p>
     <p class="note">Gaps are unknown, not zero. Incomplete bucket means are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
     </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th><th scope="col">Estimated cost while above</th><th scope="col">Estimated excess cost</th></tr></thead><tbody id="thresholds"></tbody></table></div>
@@ -501,17 +511,15 @@ async function renderDashboard(): Promise<void> {
   chart = new DemandChart(element("chart"), visible => {
     element("off-peak-key").hidden = !visible.offPeak;
     element("threshold-key").hidden = !visible.threshold;
-  });
+  }, setCustomWindow);
   if (authenticationRequired) {
     element("logout").onclick = async () => {
       try { await api("/api/auth/logout", {}); renderLogin(); } catch (error) { showError(error); }
     };
   }
   element<HTMLFormElement>("range").onsubmit = event => {
-    event.preventDefault(); selectedMinutes = 0; followLatest = false;
-    setWindow(new Date(element<HTMLInputElement>("from").value), new Date(element<HTMLInputElement>("to").value));
-    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) button.setAttribute("aria-pressed", "false");
-    clearMessage(); void refresh();
+    event.preventDefault();
+    setCustomWindow(new Date(element<HTMLInputElement>("from").value), new Date(element<HTMLInputElement>("to").value));
   };
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-minutes]")) {
     button.onclick = () => { setRange(Number(button.dataset.minutes)); clearMessage(); void refresh(); };

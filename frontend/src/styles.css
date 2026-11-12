@@ -11,6 +11,7 @@
   --line: #34314c;
   --chart-mean: #a6dfe7;
   --chart-peak: #bbabff;
+  --chart-ev: #f2bd6b;
   --chart-off-peak: #6ccfb522;
   --chart-threshold: #f2cba9;
   color: var(--ink);
