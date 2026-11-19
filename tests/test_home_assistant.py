@@ -54,6 +54,62 @@ def home_config() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
+    "status,age,slot_status,expected,error",
+    [
+        ("plugged_in", 0, 200, "plugged_in", None),
+        ("charging", 0, 503, "charging", "home_assistant_unavailable"),
+        ("unplugged", 0, 200, "unplugged", None),
+        ("charging", 121_000_000, 200, None, "home_assistant_stale_charger_status"),
+    ],
+)
+async def test_live_charger_and_planned_windows(
+    store: Store,
+    home_config: dict[str, Any],
+    status: str,
+    age: int,
+    slot_status: int,
+    expected: str | None,
+    error: str | None,
+) -> None:
+    now = now_us()
+    current = {"start": iso(now - 60_000_000), "end": iso(now + 60_000_000)}
+    upcoming = {"start": iso(now + 120_000_000), "end": iso(now + 180_000_000)}
+    ended = {"start": iso(now - 120_000_000), "end": iso(now - 60_000_000)}
+    requests: list[str] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/api/template":
+            return httpx.Response(
+                200, json={"status": status, "entry": "fixture-entry", "reported": iso(now - age)}
+            )
+        assert request.method == "POST"
+        assert request.url.path == "/api/services/ohme/list_charge_slots"
+        assert "return_response" in request.url.params
+        assert json.loads(request.content) == {"config_entry": "fixture-entry"}
+        return httpx.Response(
+            slot_status, json={"service_response": {"slots": [upcoming, ended, current, upcoming]}}
+        )
+
+    async def publish() -> None:
+        pass
+
+    client = HomeAssistant(httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+    try:
+        result = await EVCollector(store, client, publish).read_charger(home_config)
+        assert result["status"] == expected
+        assert result["error_code"] == error
+        if expected == "unplugged" or expected is None:
+            assert requests == ["/api/template"]
+        if expected == "plugged_in":
+            assert result["windows"] == [current, upcoming]
+        else:
+            assert result["windows"] == ([] if expected == "unplugged" else None)
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
     "cached_value,current_value,expected",
     [("7", "0", 0), ("0", "6.5", 6500)],
 )

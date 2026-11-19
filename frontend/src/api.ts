@@ -23,6 +23,12 @@ export interface TariffStatus {
 export interface RecoveryStatus {
   device_id: string; from: string; to: string; state: "pending";
 }
+export interface ChargerStatus {
+  status: "unplugged" | "plugged_in" | "charging" | "paused" | "finished" | "pending_approval" | null;
+  windows: { start: string; end: string }[] | null;
+  checked_at: string;
+  error_code: string | null;
+}
 export interface Snapshot {
   device_id: string | null; data_version: number;
   reading: { read_at: string; demand_w: number | null; import_demand_w: number | null } | null;
@@ -45,6 +51,7 @@ export interface Snapshot {
     state: string; power_w: number | null; reported_at: string | null;
     last_success_at: string | null; error_code: string | null;
     next_attempt_at: string | null; recovery_cursor_at: string | null;
+    charger?: ChargerStatus | null;
   } | null;
 }
 export interface Metrics {

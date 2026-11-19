@@ -187,6 +187,14 @@ if __name__ == "__main__":
         )
         if args.with_ev:
             app.state.ev_collector.health.update(state="running", power_w=0, reported_at=iso(at))
+            app.state.ev_collector.health["charger"] = {
+                "status": "plugged_in",
+                "checked_at": iso(now_us()),
+                "error_code": None,
+                "windows": [
+                    {"start": iso(now_us() + 3600_000_000), "end": iso(now_us() + 7200_000_000)}
+                ],
+            }
         uvicorn.run(
             app,
             host="127.0.0.1",

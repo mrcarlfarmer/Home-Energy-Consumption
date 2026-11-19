@@ -10,6 +10,11 @@ test("Home Assistant settings and real EV-excluded analytics remain separate fro
   await expect(page.locator("#energy")).toHaveText("16 kWh");
   await expect(page.locator("#above-6kw-time")).toHaveText("2 h");
   await expect(page.locator("#home-assistant-health")).toContainText("running");
+  const charger = page.getByRole("region", { name: "EV charger" });
+  await expect(charger.locator("#ev-plug")).toHaveText("Plugged in");
+  await expect(charger.locator("#ev-charging")).toHaveText("Not charging");
+  await expect(charger.getByRole("listitem")).toHaveCount(1);
+  await expect(charger.locator("#ev-plan-note")).toContainText("Ohme plan");
 
   const adjustedHistory = page.waitForResponse(response =>
     response.url().includes("/api/analytics/history?") && response.url().includes("exclude_ev=true"),

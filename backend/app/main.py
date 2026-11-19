@@ -209,6 +209,7 @@ def create_app(
                     asyncio.create_task(store.maintenance()),
                     asyncio.create_task(poller.health_timer()),
                     asyncio.create_task(ev_collector.run()),
+                    asyncio.create_task(ev_collector.run_live()),
                     asyncio.create_task(tariff_pricing.run()),
                 ]
                 if settings.auth_required:

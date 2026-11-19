@@ -8,6 +8,8 @@ import httpx
 
 from app.models import EVInterval, iso, milli, now_us, timestamp_us
 
+OHME_STATUSES = {"unplugged", "plugged_in", "charging", "paused", "finished", "pending_approval"}
+
 
 class HomeAssistantError(Exception):
     def __init__(self, code: str, *, retryable: bool = False) -> None:
@@ -157,6 +159,66 @@ class HomeAssistant:
                     "home_assistant_freshness_access_denied", retryable=True
                 ) from exc
         return self._parse_latest(row, entity)
+
+    async def charger_status(self, config: dict[str, Any]) -> tuple[str, str]:
+        # Match the official Ohme status enum on the power sensor's device, not its name.
+        template = (
+            "{% set power = " + json.dumps(config["home_assistant_entity"]) + " %}"
+            "{% set device = device_id(power) %}{% set ohme = integration_entities('ohme') %}"
+            "{% set ns = namespace(matches=[]) %}"
+            "{% if device and power in ohme %}"
+            "{% for s in expand(device_entities(device)) %}"
+            "{% set options = s.attributes.get('options') or [] %}"
+            "{% if s.entity_id in ohme and 'plugged_in' in options and 'unplugged' in options %}"
+            "{% set ns.matches = ns.matches + [s] %}{% endif %}{% endfor %}{% endif %}"
+            "{% if ns.matches | count == 1 %}{% set s = ns.matches[0] %}"
+            "{{ {'status': s.state, 'entry': config_entry_id(power), "
+            "'reported': (s.last_reported if s.last_reported is defined "
+            "else s.last_updated).isoformat()} | to_json }}{% else %}{}{% endif %}"
+        )
+        row = await self._request(config, "POST", "template", body={"template": template})
+        if not isinstance(row, dict):
+            raise HomeAssistantError("home_assistant_invalid_charger_status")
+        status, entry = row.get("status"), row.get("entry")
+        if not isinstance(status, str) or status not in OHME_STATUSES:
+            raise HomeAssistantError("home_assistant_charger_status_unavailable")
+        if not isinstance(entry, str) or not entry:
+            raise HomeAssistantError("home_assistant_invalid_charger_status")
+        try:
+            reported = timestamp_us(str(row.get("reported", "")))
+        except (ValueError, OverflowError) as exc:
+            raise HomeAssistantError("home_assistant_invalid_timestamp") from exc
+        if not -60_000_000 <= now_us() - reported <= 120_000_000:
+            raise HomeAssistantError("home_assistant_stale_charger_status")
+        return status, entry
+
+    async def charge_slots(self, config: dict[str, Any], entry: str) -> list[dict[str, str]]:
+        data = await self._request(
+            config,
+            "POST",
+            "services/ohme/list_charge_slots",
+            params={"return_response": ""},
+            body={"config_entry": entry},
+        )
+        response = data.get("service_response") if isinstance(data, dict) else None
+        slots = response.get("slots") if isinstance(response, dict) else None
+        if not isinstance(slots, list) or len(slots) > 500:
+            raise HomeAssistantError("home_assistant_invalid_charge_slots")
+        upcoming: set[tuple[int, int]] = set()
+        now = now_us()
+        try:
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    raise ValueError("Invalid slot")
+                start = timestamp_us(str(slot.get("start", "")))
+                end = timestamp_us(str(slot.get("end", "")))
+                if not 0 <= start < end:
+                    raise ValueError("Invalid slot bounds")
+                if end > now:
+                    upcoming.add((start, end))
+        except (ValueError, OverflowError) as exc:
+            raise HomeAssistantError("home_assistant_invalid_charge_slots") from exc
+        return [{"start": iso(start), "end": iso(end)} for start, end in sorted(upcoming)]
 
     async def history(self, config: dict[str, Any], start: int, end: int) -> list[EVInterval]:
         if not 0 < end - start <= 900_000_000:

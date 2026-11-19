@@ -11,6 +11,7 @@ A private Octopus Home Mini electricity dashboard for a Raspberry Pi running 64-
 - Optional Octopus household tariff pricing, with separate estimated costs for all energy while above 6 kW and only the excess.
 - Optional Intelligent Octopus Go bonus half-hours inferred from Ohme history under an explicit Prioritise Savings assumption.
 - Optional Ohme power history from Home Assistant, with a separate EV-excluded analysis view and joint-data coverage.
+- Live Ohme plug and charging status, with current and upcoming charging windows when Ohme supplies a plan.
 - Settings for API-key replacement, account/meter discovery, connectivity testing and polling control; password-protected by default, with explicit password-free LAN access available.
 - Always-on collection, restart-safe gap recovery, bounded storage, 30-day raw / 396-day five-minute / ten-year daily history, and gap/coverage reporting with local-calendar/DST handling.
 - ARM64/AMD64 multi-stage builds, hash-locked dependencies and a 140 MiB container memory guardrail.
@@ -130,6 +131,14 @@ in fifteen-minute chunks. Initial lookback uses `APP_RECOVERY_LOOKBACK_DAYS`
 (default one day); persisted recovery resumes after restart, limited to raw
 retention. Watch collection health and joint coverage while backfill progresses.
 No charging controls or Home Assistant mutations are issued.
+
+With collection enabled, the overview's **EV charger** card finds the official
+Ohme status sensor on the same Home Assistant device as the configured power
+sensor. It uses an administrator token to read status and call the read-only
+**Ohme: List charge slots** action. If status is unavailable, fresh charger
+power can indicate charging, but zero power does not establish whether the EV
+is plugged in. Planned windows use the browser's local time and may change or
+be unavailable between charging sessions. They are not household tariff slots.
 
 EV exclusion is an estimate based on recorded power changes, not a household
 submeter. Missing/unavailable EV history is unknown, not zero. Unreported Home

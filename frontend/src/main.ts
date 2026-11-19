@@ -489,6 +489,7 @@ function connect(): void {
   stream.onerror = async () => {
     dailyPage?.connection(false);
     recoveryConnected = false;
+    renderCharger();
     text("stream-health", "Reconnecting to dashboard...");
     if (recoveryPending || recoveryBusy) showRecovery("disconnected",
       "Live status updates are disconnected, so recovery progress is unknown. The server may still be working; this does not mean recovery has finished. Reconnecting...");
@@ -511,6 +512,7 @@ function connect(): void {
       recoveryHealth = h;
       if (!recoveryBusy) updateRecovery(h);
       const ev = snapshot.home_assistant;
+      renderCharger(ev);
       text("home-assistant-health", ev
         ? [
           `Ohme via Home Assistant: ${ev.state.replaceAll("_", " ")}`,
@@ -555,6 +557,45 @@ function connect(): void {
       }
     } catch (error) { showError(error); }
   });
+}
+const evWindowFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+});
+function renderCharger(ev?: Snapshot["home_assistant"]): void {
+  element("ev-status").hidden = !config.home_assistant_enabled;
+  const now = Date.now();
+  const fresh = (at?: string | null) => !!at && now - Date.parse(at) <= 120_000;
+  const charger = fresh(ev?.charger?.checked_at) ? ev?.charger : null;
+  const status = charger?.status;
+  const power = fresh(ev?.reported_at) ? ev?.power_w : null;
+  const charging = status ? status === "charging" : power != null ? power > 0 : null;
+  const charge = element("ev-charging");
+  charge.className = charging ? "healthy" : "";
+  const chargeLabel = charging === null ? "Charging status unknown" : charging
+    ? `Charging${power != null && power > 0 ? ` · ${number(power / 1000)} kW` : ""}`
+    : status === "paused" ? "Charging paused" : status === "finished" ? "Charging finished"
+    : status === "pending_approval" ? "Awaiting approval" : "Not charging";
+  if (charge.textContent !== chargeLabel) charge.textContent = chargeLabel;
+  const plugLabel = status === "unplugged" ? "Unplugged" : status ? "Plugged in" : "Plug status unknown";
+  if (element("ev-plug").textContent !== plugLabel) text("ev-plug", plugLabel);
+
+  const windows = charger?.windows?.filter(window => Date.parse(window.end) > now);
+  const note = status === "unplugged" ? "No active charging plan."
+    : windows == null ? ev?.charger?.error_code === "home_assistant_access_denied"
+      ? "Charging plan unavailable. Check Home Assistant token permissions, then save settings."
+      : "Charging plan unavailable."
+    : windows.length ? "Current and upcoming Ohme plan · browser local time"
+      : "Ohme has not reported any upcoming charging windows.";
+  if (element("ev-plan-note").textContent !== note) text("ev-plan-note", note);
+  const list = element("ev-windows");
+  const labels = (windows ?? []).map(({ start, end }) => `${evWindowFormat.format(new Date(start))} – ${evWindowFormat.format(new Date(end))}`);
+  if (labels.length !== list.children.length || labels.some((label, index) => list.children[index]?.textContent !== label)) {
+    list.replaceChildren(...labels.map(label => {
+      const item = document.createElement("li");
+      item.textContent = label;
+      return item;
+    }));
+  }
 }
 function route(): void {
   const settings = location.hash === "#settings";
@@ -603,6 +644,10 @@ async function renderDashboard(): Promise<void> {
     <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small id="coverage-hint">Within the selected window</small></article>
     <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
     <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Cost while above: <span id="above-6kw-load-cost">--</span><br>Cost of excess: <span id="above-6kw-excess-cost">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article></section>
+    <section id="ev-status" class="ev-status" aria-labelledby="ev-status-title" hidden>
+      <div><h2 id="ev-status-title">EV charger</h2><div class="ev-badges" role="status"><span id="ev-plug"></span><span id="ev-charging"></span></div></div>
+      <div><h3>Planned charging windows</h3><p id="ev-plan-note" class="note"></p><ul id="ev-windows"></ul></div>
+    </section>
     <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <p id="home-assistant-health">Ohme via Home Assistant: disabled</p>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
