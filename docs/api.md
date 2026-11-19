@@ -155,6 +155,12 @@ Each snapshot contains:
   contains the persistent fields; live snapshots also include `recovery_active`.
 - `home_assistant`: independent EV collector state, `power_w`, `reported_at`,
   latest success/retry, sanitized `error_code` and optional backfill cursor.
+  `charger` is null before the first live check or while collection is disabled.
+  It otherwise includes `checked_at`, the Ohme `status` (null if unavailable),
+  `windows` (UTC `start`/`end` pairs for active and future Ohme slots), and a
+  sanitized `error_code`. Null windows mean the plan could not be read; an empty
+  list means no current or upcoming windows were reported. The live check does
+  not write history or change charger settings.
 
 Reconnect always gets the latest complete snapshot, even when a `Last-Event-ID` is supplied. Missed event replay is deliberately not promised. There are at most four clients, one pending snapshot per client and bounded network-send time. Use history for catch-up.
 

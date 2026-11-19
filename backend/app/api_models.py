@@ -84,6 +84,21 @@ class LiveReading(BaseModel):
     quality: str
 
 
+class ChargeWindow(BaseModel):
+    start: str
+    end: str
+
+
+class ChargerStatus(BaseModel):
+    status: (
+        Literal["unplugged", "plugged_in", "charging", "paused", "finished", "pending_approval"]
+        | None
+    )
+    windows: list[ChargeWindow] | None
+    checked_at: str
+    error_code: str | None
+
+
 class HomeAssistantHealth(BaseModel):
     state: str
     last_success_at: str | None
@@ -92,6 +107,7 @@ class HomeAssistantHealth(BaseModel):
     error_code: str | None
     next_attempt_at: str | None
     recovery_cursor_at: str | None
+    charger: ChargerStatus | None = None
 
 
 class HomeAssistantConnectivity(BaseModel):

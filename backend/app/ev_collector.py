@@ -19,6 +19,7 @@ class EVCollector:
     ) -> None:
         self.store, self.client, self.publish = store, client, publish
         self.changed = asyncio.Event()
+        self.live_changed = asyncio.Event()
         self.inflight: asyncio.Task[None] | None = None
         self.health: dict[str, Any] = {
             "state": "disabled",
@@ -28,10 +29,12 @@ class EVCollector:
             "error_code": None,
             "next_attempt_at": None,
             "recovery_cursor_at": None,
+            "charger": None,
         }
 
     async def reconfigure(self) -> None:
         self.changed.set()
+        self.live_changed.set()
         if self.inflight is not None:
             self.inflight.cancel()
         self.client.reset_freshness_access()
@@ -43,8 +46,47 @@ class EVCollector:
             error_code=None,
             next_attempt_at=None,
             recovery_cursor_at=None,
+            charger=None,
         )
         await self.publish()
+
+    async def read_charger(self, config: dict[str, Any]) -> dict[str, Any]:
+        status, windows, error = None, None, None
+        try:
+            status, entry = await self.client.charger_status(config)
+            windows = [] if status == "unplugged" else await self.client.charge_slots(config, entry)
+        except HomeAssistantError as exc:
+            error = exc.code
+            log.debug("Ohme live status or plan unavailable: code=%s", error)
+        return {
+            "status": status,
+            "windows": windows,
+            "checked_at": iso(now_us()),
+            "error_code": error,
+        }
+
+    async def run_live(self) -> None:
+        while True:
+            self.live_changed.clear()
+            config = await self.store.config()
+            retry = bool(config["home_assistant_enabled"])
+            if retry:
+                charger = await self.read_charger(config)
+                if self.live_changed.is_set():
+                    continue
+                retry = not (
+                    charger["status"] is None
+                    and charger["error_code"] == "home_assistant_access_denied"
+                )
+                self.health["charger"] = charger
+                await self.publish()
+            try:
+                if retry:
+                    await asyncio.wait_for(self.live_changed.wait(), 60)
+                else:
+                    await self.live_changed.wait()
+            except TimeoutError:
+                pass
 
     async def collect(self, config: dict[str, Any]) -> None:
         if (await self.store.capacity())["storage_paused"]:
