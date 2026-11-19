@@ -2,21 +2,21 @@ import { test, expect } from "@playwright/test";
 
 test.use({ baseURL: "http://127.0.0.1:8766" });
 
-test("Carbon Aurora theme and navigation remain usable across screen sizes", async ({ page }) => {
+test("Swiss Grid theme and navigation remain usable across screen sizes", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
   const theme = await page.locator("#dashboard").evaluate(element => {
     const style = getComputedStyle(element);
     return {
       scheme: style.colorScheme,
-      background: style.getPropertyValue("--bg").trim(),
-      accent: style.getPropertyValue("--accent").trim(),
-      chart: style.getPropertyValue("--chart-mean").trim(),
+      background: style.getPropertyValue("--bg").trim().toLowerCase(),
+      accent: style.getPropertyValue("--accent").trim().toLowerCase(),
+      chart: style.getPropertyValue("--chart-mean").trim().toLowerCase(),
       font: style.fontFamily,
     };
   });
-  expect(theme).toMatchObject({ scheme: "dark", background: "#0c0c19", accent: "#bbabff", chart: "#a6dfe7" });
-  expect(theme.font).toContain("monospace");
+  expect(theme).toMatchObject({ scheme: "light", background: "#f5f6f8", accent: "#1d4ed8", chart: "#0f766e" });
+  expect(theme.font).toContain("sans-serif");
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     const version = page.getByLabel("Application version", { exact: true });

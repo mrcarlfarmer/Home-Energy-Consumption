@@ -79,22 +79,31 @@ export class DemandChart {
       if (!threshold) return;
       const y = plot.valToPos(6000, "y", true);
       const ratio = plot.ctx.canvas.width / plot.width;
+      const accent = color("--chart-threshold");
       ctx.save();
       ctx.beginPath(); ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height); ctx.clip();
-      ctx.strokeStyle = color("--chart-threshold"); ctx.lineWidth = ratio;
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.5 * ratio;
       ctx.setLineDash([6 * ratio, 4 * ratio]);
       ctx.beginPath(); ctx.moveTo(bbox.left, y); ctx.lineTo(bbox.left + bbox.width, y); ctx.stroke();
-      ctx.fillStyle = color("--chart-threshold");
-      ctx.font = `${11 * ratio}px Consolas, monospace`;
-      ctx.textAlign = "right";
-      ctx.fillText("6 kW", bbox.left + bbox.width - 6 * ratio, Math.max(bbox.top + 13 * ratio, y - 5 * ratio));
+      ctx.setLineDash([]);
+      const badgeW = 46 * ratio;
+      const badgeH = 18 * ratio;
+      const badgeX = bbox.left + bbox.width - badgeW - 6 * ratio;
+      const badgeY = Math.max(bbox.top + 4 * ratio, y - badgeH - 4 * ratio);
+      ctx.fillStyle = accent;
+      ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+      ctx.fillStyle = "#FFFFFF";
+      ctx.font = `700 ${10 * ratio}px "Helvetica Neue", "Segoe UI", Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("6 kW", badgeX + badgeW / 2, badgeY + badgeH / 2);
       ctx.restore();
     };
     const axis = {
       stroke: color("--muted"),
-      grid: { stroke: color("--line"), width: 1 },
+      grid: { stroke: color("--rule-grid") || color("--line"), width: 1 },
       ticks: { stroke: color("--line"), width: 1 },
-      font: '11px "Cascadia Code", Consolas, monospace',
+      font: '11px "Helvetica Neue", "Segoe UI", Arial, sans-serif',
     };
     this.plot = new uPlot({
       width: Math.max(1, this.target.clientWidth), height: 340,
@@ -117,9 +126,9 @@ export class DemandChart {
       series: [
         { label: "Bucket end", ...(context.timezone ? { value: (_plot: uPlot, value: number) =>
           value == null ? "--" : new Date(value * 1000).toLocaleString(undefined, { timeZone: context.timezone, timeZoneName: "short" }) } : {}) },
-        { label: "Sampled peak (W)", stroke: color("--chart-peak"), width: 1, spanGaps: false },
+        { label: "Sampled peak (W)", stroke: color("--chart-peak"), fill: color("--chart-area") || undefined, width: 1.75, spanGaps: false },
         ...(hasEV ? [{ label: "EV charging (W)", stroke: color("--chart-ev"), width: 2, spanGaps: false }] : []),
-        ...(context.grid ? [{ label: "Grid peak reference (W)", stroke: color("--muted"), width: 1, dash: [3, 3], spanGaps: false }] : []),
+        ...(context.grid ? [{ label: "Grid peak reference (W)", stroke: color("--muted"), width: 1, dash: [4, 4], spanGaps: false }] : []),
       ],
       axes: [
         { ...axis, ...(context.timezone ? { values: (_plot: uPlot, splits: number[]) =>

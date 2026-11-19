@@ -202,7 +202,7 @@ function cleanup(): void {
 }
 function renderLogin(message = ""): void {
   cleanup();
-  root.innerHTML = `<main class="login"><p class="eyebrow">YOUR HOME, IN FOCUS</p><h1>Home Energy</h1>
+  root.innerHTML = `<main class="login"><div class="login-brand"><span class="brand-square" aria-hidden="true"></span><p class="eyebrow">HOME ENERGY / SWISS GRID</p></div><h1>Home Energy</h1>
     <p>Private electricity monitoring and inverter sizing.</p>
     <form id="login"><label>Username<input id="username" autocomplete="username" value="admin" maxlength="64" required></label>
     <label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
@@ -504,6 +504,16 @@ function connect(): void {
       text("demand-unit", demand !== null && Math.abs(demand) >= 1000 ? "kW" : "W");
       const measured = snapshot.reading ? new Date(snapshot.reading.read_at).toLocaleString() : "No reading yet";
       text("read-at", `Last measurement: ${measured}`);
+      const loadPct = demand === null ? null : Math.max(0, demand) / 60;
+      text("hero-load-pct", demand === null ? "--" : demand < 0 ? `${number(Math.abs(demand) / 60, 1)}% export` : `${number(loadPct!, 1)}% of Ref`);
+      text("hero-headroom", demand === null ? "--" : demand <= 6000
+        ? `${number((6000 - Math.max(0, demand)) / 1000)} kW`
+        : `0 kW (+${number((demand - 6000) / 1000)} kW)`);
+      text("hero-direction", demand === null ? "--" : demand < 0 ? "Export" : "Import");
+      text("capacity-meta", demand === null ? "6.00 kW Reference" : `6.00 kW Reference (${number(Math.max(0, demand) / 60, 1)}% Used)`);
+      const fill = element("capacity-fill");
+      fill.style.width = demand === null ? "0%" : `${Math.min(100, Math.max(0, demand) / 60)}%`;
+      fill.dataset.over = String(demand !== null && demand > 6000);
       const h = snapshot.health;
       recoveryConnected = true;
       const recoveryFinished = recoveryPending && h.recovery_state === "complete"
@@ -616,8 +626,12 @@ function route(): void {
     }
     if (!settings && overviewInterrupted) { overviewInterrupted = false; void refresh(); }
   }
-  for (const link of document.querySelectorAll<HTMLAnchorElement>(".sidebar nav a")) {
-    if (link.hash === "#settings") link.setAttribute("aria-current", String(settings));
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(".top-nav a")) {
+    const active = settings ? link.hash === "#settings"
+      : dailyVisible ? link.hash === "#inverters"
+      : link.hash === (location.hash === "#history" || location.hash === "#inverters" ? location.hash : "#overview");
+    link.classList.toggle("is-active", active);
+    if (settings && link.hash === "#settings") link.setAttribute("aria-current", "true");
     else link.removeAttribute("aria-current");
   }
   if (settings) window.scrollTo(0, 0);
@@ -627,35 +641,58 @@ async function renderDashboard(): Promise<void> {
   cleanup();
   config = await api<Config>("/api/config");
   lastVersion = -1;
-  root.innerHTML = `<div id="dashboard"><a class="skip-link" href="#overview">Skip to dashboard</a>
-    <aside class="sidebar"><a class="brand-mark" href="#overview" aria-label="Home Energy overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z"/></svg></a>
-    <nav aria-label="Dashboard navigation">
-    <a href="#overview" aria-label="Overview" title="Overview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg><span>Overview</span></a>
-    <a href="#history" aria-label="Demand history" title="Demand history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M6 15l4-5 4 3 6-8"/></svg><span>History</span></a>
-    <a href="#inverters" aria-label="Inverter sizing" title="Inverter sizing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8l10-5Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></svg><span>Inverters</span></a>
-    <a href="#settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 3v8M16 13v8"/></svg><span>Settings</span></a>
-    ${authenticationRequired ? '<button id="logout" class="nav-button" aria-label="Sign out" title="Sign out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>' : ""}
-    </nav></aside><div class="workspace"><p id="message" role="alert"></p><main id="overview">
-    <div class="page-heading"><div><p class="eyebrow">HOME ENERGY / CONTROL ROOM</p><h1>Home Energy<span class="accent">_</span></h1></div><span class="local-badge">LOCAL / RASPBERRY PI</span></div>
+  root.innerHTML = `<div id="dashboard" class="sheet"><a class="skip-link" href="#overview">Skip to dashboard</a>
+    <div class="frame"><header class="masthead"><div class="brand-zone">
+    <a class="brand-mark" href="#overview" aria-label="Home Energy overview"><span class="brand-square" aria-hidden="true"></span><span class="brand-title">Home Energy / Swiss Grid</span></a>
+    <span class="local-badge">LOCAL / RASPBERRY PI</span></div>
+    <nav class="top-nav" aria-label="Dashboard navigation">
+    <a class="nav-btn is-active" href="#overview">Overview</a>
+    <a class="nav-btn" href="#history">Demand history</a>
+    <a class="nav-btn" href="#inverters">Inverter sizing</a>
+    <a class="nav-btn" href="#settings">Settings</a>
+    ${authenticationRequired ? '<button id="logout" class="nav-btn nav-logout" type="button">Sign out</button>' : ""}
+    </nav></header><div class="workspace"><p id="message" role="alert"></p><main id="overview">
+    <h1 class="sr-only">Home Energy</h1>
     ${authenticationRequired ? "" : '<p class="access-warning" role="note">Login disabled: anyone who can reach this dashboard can view data and change settings. Trusted LAN only.</p>'}
-    <section class="metrics" aria-label="Energy overview"><article class="live-card"><span class="channel">CH.01</span><p>Live grid demand</p><div class="reading"><strong id="demand">--</strong> <span id="demand-unit">W</span></div><p id="read-at">No reading yet</p></article>
-    <article><span class="channel">CH.02</span><p id="energy-label">Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
-    <article><span class="channel">CH.03</span><p id="peak-label">Sampled peak</p><strong id="peak">--</strong><small id="peak-hint">Highest observed reading</small></article>
-    <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small id="coverage-hint">Within the selected window</small></article>
-    <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
-    <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Cost while above: <span id="above-6kw-load-cost">--</span><br>Cost of excess: <span id="above-6kw-excess-cost">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article></section>
-    <section id="ev-status" class="ev-status" aria-labelledby="ev-status-title" hidden>
-      <div><h2 id="ev-status-title">EV charger</h2><div class="ev-badges" role="status"><span id="ev-plug"></span><span id="ev-charging"></span></div></div>
-      <div><h3>Planned charging windows</h3><p id="ev-plan-note" class="note"></p><ul id="ev-windows"></ul></div>
+    <div class="upper-band">
+    <section class="demand-panel live-card" aria-label="Live demand and key metrics">
+      <div class="section-kicker"><span><strong>01 / Live Net Demand</strong></span><span id="read-at">No reading yet</span></div>
+      <div class="hero-readout">
+        <div class="hero-number-group"><strong id="demand" class="hero-numeral">--</strong> <span id="demand-unit" class="hero-unit">W</span></div>
+        <div class="hero-side-spec">
+          <div class="spec-row"><span class="spec-label">Reference Limit</span><span class="spec-val">6.00 kW</span></div>
+          <div class="spec-row"><span class="spec-label">Current Load</span><span id="hero-load-pct" class="spec-val accent">--</span></div>
+          <div class="spec-row"><span class="spec-label">Available Headroom</span><span id="hero-headroom" class="spec-val">--</span></div>
+          <div class="spec-row"><span class="spec-label">Grid Direction</span><span id="hero-direction" class="spec-val">--</span></div>
+        </div>
+      </div>
+      <div class="capacity-block">
+        <div class="capacity-bar-meta"><span>0.00 kW</span><span>3.00 kW Midpoint</span><span id="capacity-meta">6.00 kW Reference</span></div>
+        <div class="capacity-track"><div id="capacity-fill" class="capacity-fill"></div><div class="capacity-tick-mid"></div></div>
+      </div>
+      <div class="kpi-strip metrics" aria-label="Energy overview">
+        <article><span class="channel">CH.02</span><p id="energy-label">Estimated import</p><strong id="energy">--</strong><small>Within the selected window</small></article>
+        <article><span class="channel">CH.03</span><p id="peak-label">Sampled peak</p><strong id="peak">--</strong><small id="peak-hint">Highest observed reading</small></article>
+        <article><span class="channel">CH.04</span><p>Observed coverage</p><strong id="coverage">--</strong><small id="coverage-hint">Within the selected window</small></article>
+        <article class="threshold-card"><span class="channel">CH.05</span><p>Time above 6 kW</p><strong id="above-6kw-time">--</strong>
+        <small>Energy while above: <span id="above-6kw-energy">--</span><br>Excess beyond 6 kW: <span id="above-6kw-excess">--</span><br>Cost while above: <span id="above-6kw-load-cost">--</span><br>Cost of excess: <span id="above-6kw-excess-cost">--</span><br><span id="above-6kw-hint">Observed within the selected window</span></small></article>
+      </div>
     </section>
-    <div class="dashboard-grid"><section class="collection-panel" aria-labelledby="collection-title"><h2 id="collection-title">Collection health</h2><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
+    <div class="upper-aside">
+    <section id="ev-status" class="ev-status ev-panel" aria-labelledby="ev-status-title" hidden>
+      <div class="ev-observed"><div class="section-kicker"><h2 id="ev-status-title">EV charger</h2><span class="ev-kicker-tag">02 / Observed</span></div><div class="ev-badges" role="status"><span id="ev-plug"></span><span id="ev-charging"></span></div></div>
+      <div class="ev-planned"><div class="section-kicker"><h3>Planned charging windows</h3><span class="planned-tag">Planned &mdash; Not Observed History</span></div><p id="ev-plan-note" class="note"></p><ul id="ev-windows"></ul></div>
+    </section>
+    <section class="collection-panel" aria-labelledby="collection-title"><div class="section-kicker"><h2 id="collection-title">Collection health</h2><span class="eyebrow-inline">TELEMETRY</span></div><p id="collector-health">Connecting...</p><p id="stream-health"></p><small id="upstream-health"></small>
     <p id="home-assistant-health">Ohme via Home Assistant: disabled</p>
     <form id="polling" class="polling-controls" aria-label="Live polling controls">
     <div class="section-heading"><h3>Polling</h3><button id="toggle-polling" type="button">Start polling</button></div>
     <p id="polling-status" role="status"></p>
     <div class="range"><label>Check every (seconds)<input id="live-interval" type="number" min="30" max="3600" step="1" required aria-describedby="polling-help"></label><button type="submit">Save interval</button></div>
     <p id="polling-help" class="note"></p></form></section>
-    <section id="history"><div class="section-heading"><div><p class="eyebrow">OBSERVED DEMAND</p><h2>Demand, in detail</h2></div><select id="history-device" aria-label="Historical meter"></select></div>
+    </div>
+    </div>
+    <section id="history" class="chart-band"><div class="section-heading"><div><p class="eyebrow">03 / OBSERVED DEMAND</p><h2>Demand, in detail</h2></div><select id="history-device" aria-label="Historical meter"></select></div>
     <div class="graph-controls">
     <label class="check switch"><input id="analysis-basis" type="checkbox" role="switch" aria-describedby="analysis-basis-note">Exclude EV charging</label>
     <label class="check switch"><input id="graph-auto-refresh" type="checkbox" role="switch" aria-describedby="graph-refresh-status">Auto-refresh graph</label>
@@ -681,7 +718,7 @@ async function renderDashboard(): Promise<void> {
     <p id="ev-chart-status" class="note"></p>
     <details id="charging-details" hidden><summary>EV charging and bonus-rate periods</summary><p id="charging-details-note" class="note"></p><div class="table-scroll"><table><thead><tr><th scope="col">Evidence / rate</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Household rate including VAT</th></tr></thead><tbody id="charging-periods"></tbody></table></div></details>
     <p class="note">Gaps are unknown, not zero. Incomplete bucket means are not drawn. Chart timestamps use your browser timezone. Peaks are sampled; short surges may be missed.</p>
-    </section></div><section id="inverters"><div class="section-heading"><div><p class="eyebrow">REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
+    </section><section id="inverters" class="inverters-band"><div class="section-heading"><div><p class="eyebrow">04 / REFERENCE COMPARISON</p><h2>Explore inverter sizing</h2></div><span id="inverter-window" class="local-badge">SELECTED WINDOW</span></div>
     <div class="table-scroll"><table><thead><tr><th scope="col">Inverter rating</th><th scope="col">Observed time above</th><th scope="col">Energy while above</th><th scope="col">Excess energy</th><th scope="col">Estimated cost while above</th><th scope="col">Estimated excess cost</th></tr></thead><tbody id="thresholds"></tbody></table></div>
     <p id="pricing-note" class="note"></p>
     <p class="note">Energy while above includes the whole load during those periods. Excess energy includes only demand beyond the rating. Grid import can understate household demand when solar or a battery supplies power. The 6 kW comparison is not a G98/G99 compliance assessment.</p>
@@ -708,7 +745,7 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
     <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention, omitting the minute either side of recorded charging starts/stops; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
-    </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div>`;
+    </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();
   void loadTariff();
   dailyPage = new DailyPage(element("daily-page"), () => config, showError);
