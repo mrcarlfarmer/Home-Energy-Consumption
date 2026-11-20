@@ -35,6 +35,36 @@ let overviewScroll = 0;
 let overviewInterrupted = false;
 let overviewLoaded = false;
 
+type Theme = "light" | "dark";
+const THEME_STORAGE_KEY = "home-energy-theme";
+function currentTheme(): Theme {
+  try { return localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light"; }
+  catch { return "light"; }
+}
+function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (meta) meta.content = theme === "dark" ? "#0D0F12" : "#F5F6F8";
+  const toggle = document.getElementById("theme-toggle");
+  if (toggle) toggle.setAttribute("aria-checked", String(theme === "dark"));
+}
+function themeSwitchMarkup(): string {
+  const dark = currentTheme() === "dark";
+  return `<button id="theme-toggle" class="theme-switch" type="button" role="switch" aria-checked="${dark}" aria-label="Dark mode"><span class="theme-switch-track" aria-hidden="true"><span class="theme-switch-thumb"></span></span><span>Dark mode</span></button>`;
+}
+function bindThemeToggle(): void {
+  const toggle = document.getElementById("theme-toggle");
+  if (!toggle) return;
+  toggle.onclick = () => {
+    const next: Theme = currentTheme() === "dark" ? "light" : "dark";
+    try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch {}
+    applyTheme(next);
+    chart?.redraw();
+    dailyPage?.redrawChart();
+  };
+}
+applyTheme(currentTheme());
+
 function fillRecovery(): void {
   element<HTMLButtonElement>("recover-history").disabled = recoveryBusy || !config.polling_enabled
     || !recoveryRange || recoveryRange.device_id !== config.active_device_id;
@@ -202,12 +232,13 @@ function cleanup(): void {
 }
 function renderLogin(message = ""): void {
   cleanup();
-  root.innerHTML = `<main class="login"><div class="login-brand"><span class="brand-square" aria-hidden="true"></span><p class="eyebrow">HOME ENERGY / SWISS GRID</p></div><h1>Home Energy</h1>
+  root.innerHTML = `<main class="login"><div class="login-brand"><span class="brand-square" aria-hidden="true"></span><p class="eyebrow">HOME ENERGY</p>${themeSwitchMarkup()}</div><h1>Home Energy</h1>
     <p>Private electricity monitoring and inverter sizing.</p>
     <form id="login"><label>Username<input id="username" autocomplete="username" value="admin" maxlength="64" required></label>
     <label>Dashboard password<input id="password" type="password" autocomplete="current-password" required></label>
     <button type="submit">Sign in</button></form><p id="message" role="alert"></p>
     <small>${transportNotice || "Credentials stay on your Raspberry Pi. Use your trusted HTTPS address."}</small>${versionMarkup}</main>`;
+  bindThemeToggle();
   text("message", message);
   element<HTMLFormElement>("login").onsubmit = async (event) => {
     event.preventDefault(); clearMessage();
@@ -643,8 +674,8 @@ async function renderDashboard(): Promise<void> {
   lastVersion = -1;
   root.innerHTML = `<div id="dashboard" class="sheet"><a class="skip-link" href="#overview">Skip to dashboard</a>
     <div class="frame"><header class="masthead"><div class="brand-zone">
-    <a class="brand-mark" href="#overview" aria-label="Home Energy overview"><span class="brand-square" aria-hidden="true"></span><span class="brand-title">Home Energy / Swiss Grid</span></a>
-    <span class="local-badge">LOCAL / RASPBERRY PI</span></div>
+    <a class="brand-mark" href="#overview" aria-label="Home Energy overview"><span class="brand-square" aria-hidden="true"></span><span class="brand-title">Home Energy</span></a>
+    <span class="local-badge">LOCAL / RASPBERRY PI</span>${themeSwitchMarkup()}</div>
     <nav class="top-nav" aria-label="Dashboard navigation">
     <a class="nav-btn is-active" href="#overview">Overview</a>
     <a class="nav-btn" href="#history">Demand history</a>
@@ -747,6 +778,7 @@ async function renderDashboard(): Promise<void> {
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
     </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();
+  bindThemeToggle();
   void loadTariff();
   dailyPage = new DailyPage(element("daily-page"), () => config, showError);
   window.onhashchange = route; route();
@@ -902,7 +934,8 @@ async function start(): Promise<void> {
       return;
     }
     cleanup();
-    root.innerHTML = '<main class="login"><h1>Home Energy</h1><p id="message" role="alert"></p><button id="retry">Retry</button></main>';
+    root.innerHTML = `<main class="login"><div class="login-brand"><span class="brand-square" aria-hidden="true"></span><p class="eyebrow">HOME ENERGY</p>${themeSwitchMarkup()}</div><h1>Home Energy</h1><p id="message" role="alert"></p><button id="retry">Retry</button></main>`;
+    bindThemeToggle();
     showError(error);
     element("retry").onclick = () => { void start(); };
   }

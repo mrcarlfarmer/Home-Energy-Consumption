@@ -15,6 +15,8 @@ interface ChartContext {
 export class DemandChart {
   private plot?: uPlot;
   private observer: ResizeObserver;
+  private lastArgs?: [History, TariffStatus["rates"], TariffStatus["charging"], TariffStatus["unresolved"], ChartContext];
+  private suppressingScale = false;
   constructor(
     private target: HTMLElement,
     private indicators: (visible: ChartIndicators) => void,
@@ -30,6 +32,7 @@ export class DemandChart {
     charging: TariffStatus["charging"] = [], unresolved: TariffStatus["unresolved"] = [],
     context: ChartContext = {},
   ): void {
+    this.lastArgs = [history, rates, charging, unresolved, context];
     this.plot?.destroy();
     const s = history.series;
     // Incomplete EV bucket means are not drawn as a fully supported continuous curve.
@@ -92,7 +95,7 @@ export class DemandChart {
       const badgeY = Math.max(bbox.top + 4 * ratio, y - badgeH - 4 * ratio);
       ctx.fillStyle = accent;
       ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
-      ctx.fillStyle = "#FFFFFF";
+      ctx.fillStyle = color("--chart-threshold-ink") || "#FFFFFF";
       ctx.font = `700 ${10 * ratio}px "Helvetica Neue", "Segoe UI", Arial, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -112,7 +115,7 @@ export class DemandChart {
       hooks: {
         drawClear: [shadeOffPeak], draw: [drawThreshold],
         setScale: [(plot, key) => {
-          if (!this.rangeChanged || key !== "x" || plot.status !== 1) return;
+          if (this.suppressingScale || !this.rangeChanged || key !== "x" || plot.status !== 1) return;
           const { min, max } = plot.scales.x;
           if (min == null || max == null) return;
           const from = new Date(Math.round(min) * 1000), to = new Date(Math.round(max) * 1000);
@@ -146,7 +149,22 @@ export class DemandChart {
   focus(start: number, end: number): void {
     this.plot?.setScale("x", { min: start, max: end });
   }
+  redraw(): void {
+    if (!this.lastArgs) return;
+    const xMin = this.plot?.scales.x.min;
+    const xMax = this.plot?.scales.x.max;
+    this.suppressingScale = true;
+    try {
+      this.update(...this.lastArgs);
+      if (xMin != null && xMax != null && this.plot) {
+        this.plot.setScale("x", { min: xMin, max: xMax });
+      }
+    } finally {
+      this.suppressingScale = false;
+    }
+  }
   clear(): void {
+    this.lastArgs = undefined;
     this.plot?.destroy(); this.plot = undefined;
     this.indicators({ offPeak: false, bonus: false, charging: false, unresolved: false, threshold: false });
   }

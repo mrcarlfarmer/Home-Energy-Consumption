@@ -2,21 +2,42 @@ import { test, expect } from "@playwright/test";
 
 test.use({ baseURL: "http://127.0.0.1:8766" });
 
-test("Swiss Grid theme and navigation remain usable across screen sizes", async ({ page }) => {
+test("architectural light and dark themes and navigation remain usable across screen sizes", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#thresholds tr")).toHaveCount(1);
-  const theme = await page.locator("#dashboard").evaluate(element => {
+  expect(await page.evaluate(() => document.body.innerText)).not.toMatch(/swiss\s+grid/i);
+  const readTheme = () => page.locator("#dashboard").evaluate(element => {
     const style = getComputedStyle(element);
     return {
       scheme: style.colorScheme,
       background: style.getPropertyValue("--bg").trim().toLowerCase(),
       accent: style.getPropertyValue("--accent").trim().toLowerCase(),
       chart: style.getPropertyValue("--chart-mean").trim().toLowerCase(),
+      chartPeak: style.getPropertyValue("--chart-peak").trim().toLowerCase(),
       font: style.fontFamily,
+      themeColor: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.content.toLowerCase(),
     };
   });
-  expect(theme).toMatchObject({ scheme: "light", background: "#f5f6f8", accent: "#1d4ed8", chart: "#0f766e" });
-  expect(theme.font).toContain("sans-serif");
+  const lightTheme = await readTheme();
+  expect(lightTheme).toMatchObject({
+    scheme: "light", background: "#f5f6f8", accent: "#1d4ed8", chart: "#0f766e", chartPeak: "#111315", themeColor: "#f5f6f8",
+  });
+  expect(lightTheme.font).toContain("sans-serif");
+
+  const themeSwitch = page.getByRole("switch", { name: "Dark mode", exact: true });
+  await expect(themeSwitch).toHaveAttribute("aria-checked", "false");
+  await themeSwitch.click();
+  await expect(themeSwitch).toHaveAttribute("aria-checked", "true");
+  const darkTheme = await readTheme();
+  expect(darkTheme).toMatchObject({
+    scheme: "dark", background: "#0d0f12", accent: "#60a5fa", chart: "#2dd4bf", chartPeak: "#f3f5f8", themeColor: "#0d0f12",
+  });
+  await expect(page.locator("#chart canvas").first()).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("switch", { name: "Dark mode", exact: true })).toHaveAttribute("aria-checked", "true");
+  expect((await readTheme()).scheme).toBe("dark");
+
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     const version = page.getByLabel("Application version", { exact: true });
@@ -32,6 +53,10 @@ test("Swiss Grid theme and navigation remain usable across screen sizes", async 
     await expect(page.getByRole("heading", { name: "Demand, in detail" })).toBeInViewport();
     await expect(page.locator("#chart canvas").first()).toBeVisible();
   }
+
+  await page.getByRole("switch", { name: "Dark mode", exact: true }).click();
+  await expect(page.getByRole("switch", { name: "Dark mode", exact: true })).toHaveAttribute("aria-checked", "false");
+  expect((await readTheme()).scheme).toBe("light");
 });
 
 test("opens directly without cookies, keeps settings and streams without login", async ({ page, context }) => {

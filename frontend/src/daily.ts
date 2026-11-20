@@ -50,6 +50,7 @@ export class DailyPage {
     this.pending = undefined;
     this.chart?.destroy(); this.chart = undefined;
   }
+  redrawChart(): void { this.chart?.redraw(); }
   destroy(): void { this.hide(); this.target.replaceChildren(); }
 
   async open(hash: string, reload = false): Promise<void> {
