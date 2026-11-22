@@ -50,6 +50,7 @@ export class DailyPage {
     this.pending = undefined;
     this.chart?.destroy(); this.chart = undefined;
   }
+  redrawChart(): void { this.chart?.redraw(); }
   destroy(): void { this.hide(); this.target.replaceChildren(); }
 
   async open(hash: string, reload = false): Promise<void> {
@@ -116,7 +117,7 @@ export class DailyPage {
     }) : this.date;
     const label = config.devices.find(device => device.device_id === this.device)?.label ?? this.device;
     return `<div class="day-breadcrumb"><a id="day-back" href="#inverters">&larr; Back to overview</a><span>/ Daily analysis / ${escape(this.date)}</span></div>
-      <div class="page-heading day-heading"><div><p class="eyebrow">HOME ENERGY / DAILY ANALYSIS</p><h1>${escape(title)}<span class="accent">_</span></h1>
+      <div class="page-heading day-heading"><div><p class="eyebrow">HOME ENERGY / DAILY ANALYSIS</p><h1>${escape(title)}</h1>
       <p class="note">${escape(label)} &middot; ${escape(this.timezone)}${data ? ` &middot; ${hours((Date.parse(data.calendar_to) - Date.parse(data.from)) / 1000)} calendar day${data.partial ? " &middot; today, clipped at request time" : ""}` : ""}</p></div>
       <div class="day-date-controls"><a class="day-button" aria-label="Previous calendar day" href="${escape(this.link(this.shift(-1)))}">&larr;</a>
       <label class="day-date-label">Calendar date<input id="day-date" type="date" min="1970-01-01" ${data ? `max="${data.today}"` : ""} value="${escape(this.date)}"></label>
