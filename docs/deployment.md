@@ -95,7 +95,7 @@ Other containers can share the Pi's IP using different published ports. If 8443 
 
 Connectivity tests do not save credentials or enable collection. Test requests share the telemetry quota governor; a recent test/poll can require waiting before the next test. An accessible meter with no recent data is reported separately from a successful telemetry retrieval.
 
-The demand and inverter-sizing chart offers **5 min**, **15 min**, **30 min**, **1 hour**, **24 hours**, **7 days** and **30 days**, plus a custom range. Presets end at the current time and continue moving forward with live updates.
+The **Dark mode** switch is available on the sign-in page and dashboard; its preference is saved in that browser. The demand and inverter-sizing chart offers **5 min**, **15 min**, **30 min**, **1 hour**, **12 hours**, **24 hours**, **7 days** and **30 days**, plus a custom range. Presets end at the current time and continue moving forward with live updates.
 
 ## Resource policy and images
 
