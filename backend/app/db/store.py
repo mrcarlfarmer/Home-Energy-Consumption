@@ -104,6 +104,7 @@ class Store:
                         "007_requested_recovery.sql",
                         "008_ev_bonus_rates.sql",
                         "009_daily_recovery.sql",
+                        "010_diagnostics.sql",
                     )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")
@@ -152,6 +153,32 @@ class Store:
     async def config(self) -> dict[str, Any]:
         async with self.read() as conn:
             return dict(await one(conn, "SELECT * FROM app_config WHERE singleton=1"))
+
+    async def save_diagnostics(self, events: list[tuple[int, str, str, str]]) -> None:
+        async with self.write() as conn:
+            await conn.executemany(
+                "INSERT INTO diagnostic_events(at_us,level,source,message) VALUES(?,?,?,?)",
+                events,
+            )
+            await conn.execute(
+                "DELETE FROM diagnostic_events WHERE at_us<? OR id <= "
+                "(SELECT id FROM diagnostic_events ORDER BY id DESC LIMIT 1 OFFSET 10000)",
+                (now_us() - 30 * DAY_US,),
+            )
+
+    async def diagnostics(self, before: int | None, limit: int) -> list[dict[str, Any]]:
+        async with self.read() as conn:
+            async with conn.execute(
+                "SELECT id,at_us,level,source,message FROM diagnostic_events "
+                "WHERE at_us>=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?",
+                (now_us() - 30 * DAY_US, before, before, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {"id": row["id"], "at": iso(row["at_us"]), "level": row["level"],
+             "source": row["source"], "message": row["message"]}
+            for row in rows
+        ]
 
     async def public_config(self) -> dict[str, Any]:
         async with self.read() as conn:

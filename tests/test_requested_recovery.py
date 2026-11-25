@@ -59,7 +59,6 @@ async def test_requested_recovery_repairs_internal_gaps_and_refreshes_metrics(st
     poller = Poller(store, client, Hub())
     try:
         await poller.recover(await store.config())
-        await poller.recover(await store.config())
         assert mock.call_count == 1
         assert (await store.recovery(DEVICE))["status"] == "complete"
         assert (await store.recovery_health(DEVICE))["recovery_gap_count"] == 0
@@ -95,6 +94,104 @@ async def test_requested_history_survives_restart_and_automatic_lookback(store: 
     merged = await store.recovery(DEVICE)
     assert merged["cursor_us"] == start
     assert at - 180_000_000 <= merged["target_us"] <= now_us() - 180_000_000
+
+
+async def test_recovery_fetches_full_range_and_processes_bounded_windows(store: Store) -> None:
+    start = now_us() // 10_000_000 * 10_000_000 - 5 * 3600_000_000
+    end = start + 3 * 3600_000_000
+    rows = readings(start, 3 * 3600)
+    await store.request_recovery(DEVICE, start, end, 2)
+    client = Kraken()
+    client.telemetry = AsyncMock(  # type: ignore[method-assign]
+        return_value=[{"readAt": row.read_at, "demand": 4000} for row in rows]
+    )
+    try:
+        await Poller(store, client, Hub()).recover(await store.config())
+        client.telemetry.assert_awaited_once()
+        args = client.telemetry.await_args.args
+        assert timestamp_us(args[2]) == start - 10_000_000
+        assert timestamp_us(args[3]) == end + 10_000_000
+        assert (await store.recovery(DEVICE))["status"] == "complete"
+        assert (await store.recovery_health(DEVICE))["recovery_gap_count"] == 0
+        assert (await Analytics(store).summary(start, end, "UTC"))["coverage_pct"] == 100
+    finally:
+        await client.close()
+
+
+async def test_long_recovery_processing_allows_live_collection(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = now_us() // 10_000_000 * 10_000_000 - 2 * 3600_000_000
+    end = start + 1800_000_000
+    await store.request_recovery(DEVICE, start, end, 2)
+    client = Kraken()
+    client.telemetry = AsyncMock(  # type: ignore[method-assign]
+        return_value=[{"readAt": row.read_at, "demand": 4000} for row in readings(start, 1800)]
+    )
+    poller = Poller(store, client, Hub())
+    live = AsyncMock()
+    poller.collect = live  # type: ignore[method-assign]
+    clock = iter((0.0, 61.0, 61.0))
+    monkeypatch.setattr("app.poller.monotonic", lambda: next(clock))
+    try:
+        await poller.recover(await store.config())
+        live.assert_awaited_once()
+        client.telemetry.assert_awaited_once()
+        assert (await store.recovery(DEVICE))["status"] == "complete"
+    finally:
+        await client.close()
+
+
+async def test_rejected_full_range_falls_back_without_losing_newer_data(store: Store) -> None:
+    start = now_us() // 10_000_000 * 10_000_000 - 2 * 3600_000_000
+    end = start + 1800_000_000
+    await store.request_recovery(DEVICE, start, end, 2)
+    client = Kraken()
+    client.telemetry = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            KrakenError("range_too_old"),
+            KrakenError("range_too_old"),
+            [{"readAt": row.read_at, "demand": 4000} for row in readings(start + 900_000_000, 900)],
+        ]
+    )
+    poller = Poller(store, client, Hub())
+    try:
+        config = await store.config()
+        await poller.recover(config)
+        assert (await store.recovery(DEVICE))["cursor_us"] == start
+        await poller.recover(config)
+        assert (await store.recovery(DEVICE))["cursor_us"] == start + 900_000_000
+        await poller.recover(config)
+        assert (await store.recovery(DEVICE))["status"] == "complete"
+        async with store.read() as conn:
+            gap = await one(conn, "SELECT * FROM recovery_gaps")
+            assert (gap["start_us"], gap["end_us"], gap["reason"]) == (
+                start, start + 900_000_000, "range_too_old"
+            )
+        assert (await Analytics(store).summary(start + 900_000_000, end, "UTC"))[
+            "coverage_pct"
+        ] == 100
+    finally:
+        await client.close()
+
+
+async def test_oversized_recovery_response_retries_in_bounded_ranges(store: Store) -> None:
+    start = now_us() - 3 * DAY_US
+    end = start + 2 * DAY_US
+    await store.request_recovery(DEVICE, start, end, 2)
+    client = Kraken()
+    mock = AsyncMock(side_effect=[KrakenError("upstream_response_too_large"), []])
+    client.telemetry = mock  # type: ignore[method-assign]
+    poller = Poller(store, client, Hub())
+    try:
+        config = await store.config()
+        await poller.recover(config)
+        assert (await store.recovery(DEVICE))["cursor_us"] == start
+        await poller.recover(config)
+        assert timestamp_us(mock.await_args_list[1].args[3]) == start + DAY_US + 10_000_000
+        assert (await store.recovery(DEVICE))["cursor_us"] == start + DAY_US
+    finally:
+        await client.close()
 
 
 @pytest.mark.parametrize(
