@@ -83,11 +83,22 @@ Revision conflicts return 409, disabled polling/unsupported ranges/meters return
 with `Retry-After` (60-second local cooldown).
 
 The existing collector processes the persistent cursor, skipping fully supported
-fifteen-minute windows without upstream calls. Missing windows use the existing
-shared telemetry governor and alternate with live collection. SSE health and
+leading fifteen-minute windows without upstream calls. The remaining range is
+requested in one call (up to 31 days) and processed locally in windows; oversized
+responses or rejected old ranges fall back to smaller requests. Calls use the shared telemetry governor
+and alternate with live collection. SSE health and
 `GET /api/storage` expose progress, pauses and unavailable windows. Successful
 repairs reconcile old gap records; incomplete/empty/aged-out responses remain
 explicitly unresolved. This retries meter history only, not Home Assistant history.
+
+## Collection history
+
+`GET /api/diagnostics` requires the normal session and returns newest-first
+collection/recovery events and application warnings/errors. Use `limit` (1–100)
+and the last event's `id` as `before` to page backwards. `dropped` counts events
+that could not be recorded since this process started. Events are retained for up
+to 30 days and 10,000 entries. The log starts with this version; it does not
+import earlier container logs. Exception details and credentials are omitted.
 
 ## Tariff pricing
 

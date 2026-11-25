@@ -199,7 +199,7 @@ async def test_recovery_restart_dedup_and_revision_fence(store: Store) -> None:
         config = await store.config()
         await Poller(store, client, Hub()).recover(config)
         updated = await store.recovery(DEVICE)
-        assert updated is not None and updated["cursor_us"] == start + 900_000_000
+        assert updated is not None and updated["cursor_us"] == updated["target_us"]
         assert calls[0]["grouping"] == "TEN_SECONDS"
         async with store.read() as conn:
             assert (await one(conn, "SELECT count(*) FROM readings"))[0] == 92
@@ -223,6 +223,8 @@ async def test_recovery_unavailable_empty_and_storage_pause(store: Store) -> Non
     client.telemetry = AsyncMock(side_effect=KrakenError("range_too_old"))  # type: ignore[method-assign]
     poller = Poller(store, client, Hub())
     try:
+        await poller.recover(await store.config())
+        assert (await store.recovery(DEVICE))["cursor_us"] == at - 3600_000_000
         await poller.recover(await store.config())
         assert (await store.recovery_health(DEVICE))["recovery_gap_count"] == 1
         client.telemetry = AsyncMock(return_value=[])  # type: ignore[method-assign]

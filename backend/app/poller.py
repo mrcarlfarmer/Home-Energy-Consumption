@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import random
+from bisect import bisect_left, bisect_right
 from datetime import UTC, datetime, time, timedelta
+from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -10,7 +12,7 @@ import aiosqlite
 from app.db.store import Store, one
 from app.kraken import Kraken, KrakenError
 from app.models import Reading, iso, now_us, timestamp_us
-from app.storage import StoragePressure
+from app.storage import DAY_US, StoragePressure
 from app.streaming import Hub
 
 log = logging.getLogger(__name__)
@@ -55,6 +57,7 @@ class Poller:
         self.task: asyncio.Task[None] | None = None
         self.inflight: asyncio.Task[None] | None = None
         self.recovery_due = False
+        self.recovery_max_span = 31 * DAY_US
         self.ev_health: dict[str, Any] | None = None
 
     async def publish(self) -> None:
@@ -120,6 +123,7 @@ class Poller:
     async def reconfigure(self) -> None:
         self.changed.set()
         self.recovery_due = False
+        self.recovery_max_span = 31 * DAY_US
         if self.inflight is not None:
             self.inflight.cancel()
         await self.store.resume_recovery()
@@ -131,6 +135,7 @@ class Poller:
             raise StoragePressure("Storage capacity exhausted")
         key, device = config["octopus_api_key"], config["active_device_id"]
         self.health["last_attempt_at"] = iso(now_us())
+        log.info("Collection attempt started")
         await self.client.verify(key, config["account_number"], device)
         at = now_us()
         daily = daily_recovery_window(at, config["display_timezone"])
@@ -142,6 +147,7 @@ class Poller:
         latest = await self.store.latest(device)
         await self.store.plan_recovery(device, at, latest["read_at_us"] if latest else None)
         start = at - 180_000_000
+        log.info("Collection started: from=%s to=%s", iso(start), iso(at))
         try:
             rows = await self.client.telemetry(
                 key, device, iso(start), iso(at), config["poll_interval_seconds"]
@@ -185,6 +191,7 @@ class Poller:
         device = config["active_device_id"]
         state = await self.store.recovery(device)
         if state is None or state["status"] != "pending":
+            self.recovery_max_span = 31 * DAY_US
             await self.collect(config)
             return
         # Skip already supported history without spending another upstream request.
@@ -198,22 +205,33 @@ class Poller:
             await self.store.finish_recovery_chunk(device, start, end, config["revision"], None)
             state = await self.store.recovery(device)
             if state is None or state["status"] != "pending":
+                self.recovery_max_span = 31 * DAY_US
                 return
         else:
             return
+        request_end = min(int(state["target_us"]), start + self.recovery_max_span)
         try:
             self.health["last_attempt_at"] = iso(now_us())
             await self.publish()
+            log.info("Recovery started: from=%s to=%s", iso(start), iso(request_end))
             rows = await self.client.telemetry(
                 config["octopus_api_key"],
                 device,
                 iso(start - 10_000_000),
-                iso(end + 10_000_000),
+                iso(request_end + 10_000_000),
                 config["poll_interval_seconds"],
             )
         except KrakenError as exc:
+            if exc.code == "upstream_response_too_large" and request_end > end:
+                self.recovery_max_span = DAY_US if request_end - start > DAY_US else 900_000_000
+                log.warning("Historical response too large; retrying in smaller ranges")
+                return
             if exc.code != "range_too_old":
                 raise
+            if request_end > end:
+                self.recovery_max_span = 900_000_000
+                log.warning("Historical range rejected; retrying in smaller windows")
+                return
             await self.store.finish_recovery_chunk(
                 device,
                 start,
@@ -227,32 +245,57 @@ class Poller:
         for row in rows:
             try:
                 reading = Reading.from_kraken(row, now_us())
-                if not start - 20_000_000 <= reading.read_at_us <= end + 20_000_000:
+                if not start - 20_000_000 <= reading.read_at_us <= request_end + 20_000_000:
                     raise ValueError("Recovery reading outside requested range")
                 readings.append(reading)
             except ValueError as exc:
                 log.warning("Invalid recovery telemetry record")
                 raise KrakenError("invalid_telemetry_records") from exc
-        changed = await self.store.ingest(device, readings, config["revision"])
-        if changed:
-            self.health["last_stored_at"] = iso(now_us())
-        async with self.store.read() as conn:
-            metrics = await self.store.raw_metrics(conn, device, start, end)
-        reason = (
-            None
-            if metrics.observed_us == end - start
-            else "empty"
-            if not readings and not metrics.observed_us
-            else "partial"
-        )
-        await self.store.finish_recovery_chunk(device, start, end, config["revision"], reason)
+        readings.sort(key=lambda reading: reading.read_at_us)
+        timestamps = [reading.read_at_us for reading in readings]
+        next_live = monotonic() + config["poll_interval_seconds"]
+        while start < request_end:
+            end = min(start + 900_000_000, request_end)
+            left = bisect_left(timestamps, start - 20_000_000)
+            right = bisect_right(timestamps, end + 20_000_000)
+            chunk = readings[left:right]
+            for offset in range(0, len(chunk), 1000):
+                changed = await self.store.ingest(
+                    device, chunk[offset : offset + 1000], config["revision"]
+                )
+                if changed:
+                    self.health["last_stored_at"] = iso(now_us())
+            async with self.store.read() as conn:
+                metrics = await self.store.raw_metrics(conn, device, start, end)
+            reason = (
+                None
+                if metrics.observed_us == end - start
+                else "empty"
+                if not chunk and not metrics.observed_us
+                else "partial"
+            )
+            await self.store.finish_recovery_chunk(device, start, end, config["revision"], reason)
+            state = await self.store.recovery(device)
+            if state is None or int(state["cursor_us"]) != end:
+                return
+            start = end
+            if start < request_end and state["status"] == "pending" and monotonic() >= next_live:
+                self.recovery_due = False
+                await self.collect(config)
+                self.recovery_due = True
+                state = await self.store.recovery(device)
+                if state is None or state["status"] != "pending" or state["cursor_us"] != start:
+                    return
+                next_live = monotonic() + config["poll_interval_seconds"]
+        if state["status"] != "pending":
+            self.recovery_max_span = 31 * DAY_US
         self.health.update(
             error_code=None,
             consecutive_failures=0,
             storage_state="ok",
             last_success_at=iso(now_us()),
         )
-        log.info("Recovery chunk stored: rows=%s coverage=%s", len(readings), reason or "available")
+        log.info("Recovery range stored: rows=%s", len(readings))
 
     async def run(self) -> None:
         self.recovery_due = False
@@ -302,6 +345,7 @@ class Poller:
                         error_code="storage_limit_reached",
                     )
                     delay = max(delay, 60)
+                    log.warning("Collection paused: storage capacity exhausted")
                 except aiosqlite.Error:
                     self.recovery_due = False
                     self.health.update(storage_state="error", error_code="storage_unavailable")

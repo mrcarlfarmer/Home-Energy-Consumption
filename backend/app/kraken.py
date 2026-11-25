@@ -28,6 +28,8 @@ DEVICES = """query ElectricityDevices($accountNumber:String!) {
 }"""
 AUTH_CODES = {"KT-CT-1111", "KT-CT-1112", "KT-CT-1124", "KT-CT-1130", "KT-CT-1143"}
 RATE_CODES = {"KT-CT-1199", "KT-GB-4042"}
+MAX_TELEMETRY_ROWS = 20_000
+MAX_TELEMETRY_BYTES = 4 * 1024 * 1024
 
 
 class KrakenError(Exception):
@@ -119,7 +121,8 @@ class Kraken:
                     )
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
-                    if len(content) + len(chunk) > 1_048_576:
+                    limit = MAX_TELEMETRY_BYTES if query == TELEMETRY else 1_048_576
+                    if len(content) + len(chunk) > limit:
                         raise KrakenError("upstream_response_too_large")
                     content.extend(chunk)
                 try:
@@ -269,10 +272,8 @@ class Kraken:
             rows = data.get("smartMeterTelemetry")
             if rows is None:
                 return []
-            if (
-                not isinstance(rows, list)
-                or len(rows) > 1000
-                or any(not isinstance(r, dict) for r in rows)
-            ):
+            if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
                 raise KrakenError("invalid_telemetry_shape")
+            if len(rows) > MAX_TELEMETRY_ROWS:
+                raise KrakenError("upstream_response_too_large")
             return rows

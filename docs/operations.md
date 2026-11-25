@@ -3,15 +3,23 @@
 ## Collection and troubleshooting
 
 Live polls request a recent three-minute window. Persistent, rate-governed backfill
-attempts fifteen-minute historical chunks within the configured lookback (one day
-by default), alternating with live requests. All rows are deduplicated by
+requests the remaining historical range (up to 31 days) in one call and processes
+it in fifteen-minute windows, within the configured lookback (one day by default).
+Oversized responses or rejected old ranges are retried in smaller requests.
+All rows are deduplicated by
 device/native timestamp. Unresolved/partial intervals remain visible and are not
 replaced by zero or fabricated historical data.
 After 00:05 in the configured display timezone, the collector queues a once-per-day
-review of the previous complete local calendar day. It skips fully covered chunks
-and sends missing chunks through the same shared rate governor as live telemetry;
+review of the previous complete local calendar day. It skips fully covered leading
+chunks and requests the remaining range through the same shared rate governor as live telemetry;
 the daily job does not make additional or faster upstream requests.
 See [storage management](storage-management.md) for pause/recovery semantics.
+
+The **Collection history** page records meter collection and recovery events and
+application warnings/errors from this version onward. It keeps at most 10,000
+events for 30 days, omits exception details and credentials, and reports events
+lost because storage or the diagnostic queue was unavailable. Earlier messages
+remain in Portainer's container logs only, subject to Docker log rotation.
 
 Token refresh is single-flight and proactive. A rejected token gets one renewal/operation retry. Persistent auth/configuration failures stop automatic retries until settings change or a successful test of the saved credentials resumes already-enabled polling. HTTP and GraphQL throttling share cooldowns with connectivity tests. Transient failures use bounded exponential backoff/jitter and respect vendor retry timing.
 

@@ -10,7 +10,7 @@ from app.analytics.service import Analytics
 from app.db.store import Conflict, Store
 from app.kraken import Kraken, KrakenError
 from app.main import create_app
-from app.models import ConfigUpdate, EVInterval, Reading, TariffRate, iso, timestamp_us
+from app.models import ConfigUpdate, EVInterval, Reading, TariffRate, iso, now_us, timestamp_us
 from app.settings import Settings
 from app.storage import DAY_US
 from app.tariffs import AGREEMENTS, OctopusTariffs, TariffPricing
@@ -756,6 +756,7 @@ async def test_manual_recovery_resumes_automatic_refresh(
 
 
 async def test_tariff_api_uses_saved_settings_and_keeps_credentials_private(tmp_path: Path) -> None:
+    historical_start = now_us() - 10 * DAY_US
     provider = FixtureKraken(
         account([agreement()]),
         lambda _: httpx.Response(
@@ -814,13 +815,13 @@ async def test_tariff_api_uses_saved_settings_and_keeps_credentials_private(tmp_
         assert again.status_code == 429
         assert again.headers["Retry-After"]
         assert provider.discoveries == 1
-        partial = await client.get("/api/tariff", params={"from": iso(START)})
+        partial = await client.get("/api/tariff", params={"from": iso(historical_start)})
         assert partial.status_code == 422
         historic = await client.get(
             "/api/tariff",
             params={
-                "from": iso(START),
-                "to": iso(START + DAY_US),
+                "from": iso(historical_start),
+                "to": iso(historical_start + DAY_US),
                 "device_id": DEVICE,
             },
         )
@@ -829,8 +830,8 @@ async def test_tariff_api_uses_saved_settings_and_keeps_credentials_private(tmp_
         other = await client.get(
             "/api/tariff",
             params={
-                "from": iso(START),
-                "to": iso(START + DAY_US),
+                "from": iso(historical_start),
+                "to": iso(historical_start + DAY_US),
                 "device_id": "AA-BB-CC-DD-EE-FF-00-12",
             },
         )

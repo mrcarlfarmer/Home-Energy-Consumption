@@ -178,20 +178,24 @@ animation stops until collection can proceed again.
 
 Before live collection, the collector persists a recovery cursor/target per meter.
 On first setup it attempts the configured horizon; following downtime it starts
-from the prior latest sample. Successful live polls and fifteen-minute backfill
-chunks alternate through the same rate governor, one telemetry request per configured
-poll interval. With pending recovery, live requests are therefore normally two poll
-intervals apart. Small overlaps account for ten-second bucket rounding; source
-timestamps deduplicate retries. Cursor advancement occurs only after ingestion, so
-a crash can repeat a chunk safely. Revision/device changes fence ingestion and
-progress updates.
+from the prior latest sample. A recovery request fetches the remaining range in
+one call, up to 31 days, then processes it locally in fifteen-minute windows and
+bounded ingestion batches. Recovery and live requests share the rate governor and
+alternate when more recovery work remains. Small overlaps account for ten-second
+bucket rounding; source timestamps deduplicate retries. Cursor advancement occurs
+only after ingestion, so a crash can repeat work safely. Revision/device changes
+fence ingestion and progress updates. Long local processing pauses between windows
+to perform live collection when the polling interval has elapsed.
 
 The default one-day horizon reflects this household's observed October 2026
 successful ten-second queries at 30 minutes, one hour, six hours and 24 hours old.
 It is **not** a vendor retention guarantee or a measured maximum. Seven-day access
 and maximum request size/rate have not been established. Raising the horizon is
-best effort. The fifteen-minute chunk size is conservative, not a claimed upstream
-limit; the client also enforces a 1000-row/response-size safety bound.
+best effort. The upstream maximum request span is unknown; responses are bounded to
+20,000 rows and 4 MiB to protect the collector's memory. An oversized response is
+retried in smaller ranges. If Octopus rejects a full range as too old, recovery
+falls back to fifteen-minute requests so newer available data can still be recovered.
+Fewer calls reduce rate-limit pressure but cannot eliminate upstream throttling.
 
 Transient network/throttle failures retain the cursor and use existing backoff.
 An unretryable historical-only contract error pauses backfill without stopping live
@@ -215,10 +219,10 @@ an explicit range even when the automatic cursor has already moved beyond its
 holes. Requests require enabled polling and retained raw history, up to 31 days
 back. Unlike initial automatic recovery, an explicitly requested older range is
 not shortened to the default one-day lookback. Pending work is preserved and the
-cursor survives restarts. Already supported fifteen-minute windows are skipped,
-with at most 96 local checks per worker turn; upstream calls remain serialized
-through the same governor and alternate with live collection. There is no promise
-that Octopus still retains every requested reading.
+cursor survives restarts. Already supported leading fifteen-minute windows are
+skipped, with at most 96 local checks per worker turn; upstream calls remain
+serialized through the same governor and alternate with live collection. There is
+no promise that Octopus still retains every requested reading.
 
 Recovered readings deduplicate and invalidate affected rollups normally. The
 collector assesses coverage from the combined stored/new readings, not only the

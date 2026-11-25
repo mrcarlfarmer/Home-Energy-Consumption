@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from zoneinfo import ZoneInfoNotFoundError
 
 import aiosqlite
@@ -37,6 +37,7 @@ from app.api_models import (
 )
 from app.auth import COOKIE, SESSION_SECONDS, Auth, Session, hash_password
 from app.db.store import Conflict, Store, one
+from app.diagnostics import Diagnostics
 from app.ev_collector import EVCollector
 from app.home_assistant import HomeAssistant, HomeAssistantError
 from app.kraken import Kraken, KrakenError
@@ -172,6 +173,14 @@ def create_app(
         await store.open()
         tasks: list[asyncio.Task[None]] = []
         closing = False
+        diagnostics = Diagnostics(store)
+        app_logger = logging.getLogger("app")
+        previous_level = app_logger.level
+        app_logger.setLevel(logging.INFO)
+        app_logger.addHandler(diagnostics)
+        app.state.diagnostics = diagnostics
+        diagnostics_task = asyncio.create_task(diagnostics.run())
+        tasks.append(diagnostics_task)
         try:
             app.state.auth = None
             if settings.auth_required:
@@ -204,14 +213,16 @@ def create_app(
                     callback()
 
             if settings.start_workers:
-                tasks = [
-                    asyncio.create_task(poller.run()),
-                    asyncio.create_task(store.maintenance()),
-                    asyncio.create_task(poller.health_timer()),
-                    asyncio.create_task(ev_collector.run()),
-                    asyncio.create_task(ev_collector.run_live()),
-                    asyncio.create_task(tariff_pricing.run()),
-                ]
+                tasks.extend(
+                    [
+                        asyncio.create_task(poller.run()),
+                        asyncio.create_task(store.maintenance()),
+                        asyncio.create_task(poller.health_timer()),
+                        asyncio.create_task(ev_collector.run()),
+                        asyncio.create_task(ev_collector.run_live()),
+                        asyncio.create_task(tariff_pricing.run()),
+                    ]
+                )
                 if settings.auth_required:
                     tasks.append(asyncio.create_task(app.state.auth.watch_password()))
                 for task in tasks:
@@ -220,8 +231,13 @@ def create_app(
         finally:
             closing = True
             for task in tasks:
-                task.cancel()
+                if task is not diagnostics_task:
+                    task.cancel()
+            diagnostics.stopped.set()
             await asyncio.gather(*tasks, return_exceptions=True)
+            app_logger.removeHandler(diagnostics)
+            app_logger.setLevel(previous_level)
+            await diagnostics.close_events()
             await kraken.close()
             await home_assistant.close()
             await store.close()
@@ -242,11 +258,13 @@ def create_app(
 
     @app.exception_handler(Problem)
     async def problem_handler(request: Request, exc: Problem) -> JSONResponse:
+        log.warning("Request failed: code=%s status=%s", exc.code, exc.status)
         return problem_response(exc.status, exc.code, exc.detail, exc.retry)
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         # Pydantic errors include raw inputs; never echo credential/password values.
+        log.warning("Request validation failed")
         return problem_response(
             422, "validation_error", "; ".join(str(e["msg"]) for e in exc.errors())
         )
@@ -323,6 +341,14 @@ def create_app(
     @app.get("/api/config", response_model=PublicConfig)
     async def configuration(session: SessionDep) -> dict[str, Any]:
         return await store.public_config()
+
+    @app.get("/api/diagnostics")
+    async def diagnostics_history(
+        session: SessionDep,
+        before: Annotated[int | None, Query(ge=1)] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> dict[str, Any]:
+        return await cast(Diagnostics, app.state.diagnostics).results(before, limit)
 
     @app.post("/api/config", response_model=PublicConfig)
     async def configure(data: ConfigUpdate, session: SessionDep) -> dict[str, Any]:

@@ -88,8 +88,10 @@ action never starts it or saves credential drafts. It queues a persistent pass
 over the selected raw-history range (up to 31 days, normally 30), preserving any
 pending recovery work and excluding the newest three minutes.
 
-The collector skips fully supported fifteen-minute windows and retries missing
-ones through the existing Octopus rate governor, alternating with live requests.
+The collector skips fully supported leading fifteen-minute windows and requests
+the remaining range through the existing Octopus rate governor, processing the
+response locally in windows. Oversized responses or rejected old ranges fall back
+to smaller requests, alternating with live collection.
 Once daily after 00:05 in the configured timezone, it also queues the previous
 complete local calendar day for that same rate-governed review.
 Watch the recovery status and Collection health; a long range can take many

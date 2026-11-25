@@ -3,10 +3,18 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from app.kraken import Kraken, KrakenError, retry_after
+from app.kraken import (
+    MAX_TELEMETRY_BYTES,
+    MAX_TELEMETRY_ROWS,
+    TELEMETRY,
+    Kraken,
+    KrakenError,
+    retry_after,
+)
 
 
 async def test_single_flight_refresh_and_epoch_expiry() -> None:
@@ -36,6 +44,36 @@ async def test_single_flight_refresh_and_epoch_expiry() -> None:
         await client.token("secret")
         assert inputs == [{"APIKey": "secret"}, {"refreshToken": "refresh"}]
         assert client.refresh_expires > time.time()
+    finally:
+        await client.close()
+
+
+async def test_telemetry_accepts_large_bounded_recovery_responses() -> None:
+    client = Kraken()
+    mock = AsyncMock(return_value={"smartMeterTelemetry": [{"demand": 4000}] * 1001})
+    client.authenticated = mock  # type: ignore[method-assign]
+    try:
+        assert len(await client.telemetry("key", "device", "start", "end")) == 1001
+        client.next_telemetry = 0
+        mock.return_value = {"smartMeterTelemetry": [{}] * (MAX_TELEMETRY_ROWS + 1)}
+        with pytest.raises(KrakenError, match="upstream_response_too_large"):
+            await client.telemetry("key", "device", "start", "end")
+    finally:
+        await client.close()
+
+
+async def test_large_telemetry_responses_remain_byte_bounded() -> None:
+    payload = b'{"data":{"smartMeterTelemetry":[]}, "padding":"' + b"x" * 1_100_000 + b'"}'
+    client = Kraken(
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, content=payload))
+        )
+    )
+    try:
+        assert await client.execute(TELEMETRY, {}) == {"smartMeterTelemetry": []}
+        payload = b"x" * (MAX_TELEMETRY_BYTES + 1)
+        with pytest.raises(KrakenError, match="upstream_response_too_large"):
+            await client.execute(TELEMETRY, {})
     finally:
         await client.close()
 

@@ -102,7 +102,7 @@ function updateRecovery(health: Snapshot["health"]): void {
   ];
   if (health.recovery_pending && health.recovery_cursor_at && health.recovery_target_at) {
     const remaining = Math.max(0, (new Date(health.recovery_target_at).getTime() - new Date(health.recovery_cursor_at).getTime()) / 1000);
-    details.push(`${number(Math.ceil(remaining / 900), 0)} fifteen-minute windows remain to check. Live and historical requests alternate at the configured polling interval.`);
+    details.push(`${number(Math.ceil(remaining / 900), 0)} fifteen-minute windows remain to check. Live collection continues during recovery.`);
   }
   const show = (state: RecoveryDisplayState, message: string, active?: boolean) => showRecovery(state, [message, ...details].filter(Boolean).join(" "), active);
   if (health.recovery_error || health.recovery_state === "paused") {
@@ -122,7 +122,7 @@ function updateRecovery(health: Snapshot["health"]): void {
         health.next_attempt_at ? `Next collection attempt: ${new Date(health.next_attempt_at).toLocaleTimeString()}.` : "",
       ].filter(Boolean).join(" "), false);
     } else if (health.recovery_active) {
-      show("running", "Active-meter recovery is checking the next historical window with Octopus.");
+      show("running", "Active-meter recovery is fetching or processing historical readings.");
     } else {
       show(health.recovery_last_progress_at ? "waiting" : "queued",
         "Active-meter recovery is queued between collection requests. It has not finished.");
@@ -572,7 +572,7 @@ function connect(): void {
         h.last_attempt_at ? `Last attempt: ${new Date(h.last_attempt_at).toLocaleTimeString()}` : "",
         h.last_stored_at ? `Last write: ${new Date(h.last_stored_at).toLocaleTimeString()}` : "",
         h.error_code ?? "", h.next_attempt_at ? `Next attempt: ${new Date(h.next_attempt_at).toLocaleTimeString()}` : "",
-        h.recovery_pending ? `Recovering history: ${h.recovery_cursor_at ?? "pending"} to ${h.recovery_target_at ?? "pending"}; live and recovery requests alternate.` : "",
+        h.recovery_pending ? `Recovering history: ${h.recovery_cursor_at ?? "pending"} to ${h.recovery_target_at ?? "pending"}; live collection continues.` : "",
         h.recovery_error ? `Historical recovery paused: ${h.recovery_error}. Live collection continues; save settings or test saved connectivity to retry.` : "",
         h.recovery_gap_count ? `${h.recovery_gap_count} historical windows have missing or unavailable samples.` : "",
         h.storage_paused ? "Collection paused: storage limit or free-space reserve reached." : "",
@@ -638,13 +638,42 @@ function renderCharger(ev?: Snapshot["home_assistant"]): void {
     }));
   }
 }
+type DiagnosticEvent = { id: number; at: string; level: string; source: string; message: string };
+let diagnosticBefore: number | undefined;
+async function loadDiagnostics(older = false): Promise<void> {
+  const status = element("diagnostics-status");
+  status.textContent = "Loading collection history...";
+  try {
+    const query = older && diagnosticBefore ? `?before=${diagnosticBefore}` : "";
+    const result = await api<{ events: DiagnosticEvent[]; dropped: number }>(`/api/diagnostics${query}`);
+    const body = element<HTMLTableSectionElement>("diagnostics-events");
+    if (!older) body.replaceChildren();
+    for (const event of result.events) {
+      const row = body.insertRow();
+      for (const value of [new Date(event.at).toLocaleString(), event.level, event.source, event.message]) {
+        row.insertCell().textContent = value;
+      }
+    }
+    diagnosticBefore = result.events.at(-1)?.id;
+    element<HTMLButtonElement>("diagnostics-older").disabled = result.events.length < 100;
+    status.textContent = [
+      body.rows.length ? `Showing ${body.rows.length} events, newest first.` : "No recorded events yet.",
+      result.dropped ? `${result.dropped} events could not be recorded since startup; check container logs and storage.` : "",
+    ].filter(Boolean).join(" ");
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : "Collection history could not be loaded.";
+  }
+}
 function route(): void {
   const settings = location.hash === "#settings";
+  const diagnostics = location.hash === "#diagnostics";
   const wasDaily = dailyVisible;
   dailyVisible = location.hash.startsWith("#day/");
-  element("overview").hidden = settings || dailyVisible;
+  element("overview").hidden = settings || diagnostics || dailyVisible;
   element("settings-page").hidden = !settings;
   element("daily-page").hidden = !dailyVisible;
+  element("diagnostics-page").hidden = !diagnostics;
+  if (diagnostics) void loadDiagnostics();
   if (dailyVisible) {
     if (!wasDaily) { overviewInterrupted = !!pending || !overviewLoaded; pending?.abort(); }
     clearMessage();
@@ -652,20 +681,21 @@ function route(): void {
     window.scrollTo(0, 0);
   } else {
     dailyPage?.hide();
-    if (wasDaily && !settings) {
+    if (wasDaily && !settings && !diagnostics) {
       requestAnimationFrame(() => { window.scrollTo(0, overviewScroll); });
     }
-    if (!settings && overviewInterrupted) { overviewInterrupted = false; void refresh(); }
+    if (!settings && !diagnostics && overviewInterrupted) { overviewInterrupted = false; void refresh(); }
   }
   for (const link of document.querySelectorAll<HTMLAnchorElement>(".top-nav a")) {
     const active = settings ? link.hash === "#settings"
+      : diagnostics ? link.hash === "#diagnostics"
       : dailyVisible ? link.hash === "#inverters"
       : link.hash === (location.hash === "#history" || location.hash === "#inverters" ? location.hash : "#overview");
     link.classList.toggle("is-active", active);
-    if (settings && link.hash === "#settings") link.setAttribute("aria-current", "true");
+    if ((settings && link.hash === "#settings") || (diagnostics && link.hash === "#diagnostics")) link.setAttribute("aria-current", "true");
     else link.removeAttribute("aria-current");
   }
-  if (settings) window.scrollTo(0, 0);
+  if (settings || diagnostics) window.scrollTo(0, 0);
   else if (!dailyVisible && !wasDaily && location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }
 async function renderDashboard(): Promise<void> {
@@ -680,6 +710,7 @@ async function renderDashboard(): Promise<void> {
     <a class="nav-btn is-active" href="#overview">Overview</a>
     <a class="nav-btn" href="#history">Demand history</a>
     <a class="nav-btn" href="#inverters">Inverter sizing</a>
+    <a class="nav-btn" href="#diagnostics">Collection history</a>
     <a class="nav-btn" href="#settings">Settings</a>
     ${authenticationRequired ? '<button id="logout" class="nav-btn nav-logout" type="button">Sign out</button>' : ""}
     </nav></header><div class="workspace"><p id="message" role="alert"></p><main id="overview">
@@ -776,11 +807,18 @@ async function renderDashboard(): Promise<void> {
     <div><label class="check"><input id="ha-enabled" type="checkbox">Collect Ohme power history</label><label class="check"><input id="ha-clear-token" type="checkbox">Clear saved Home Assistant token (disable EV collection first)</label></div></div>
     <p class="note">Collection runs independently every 60 seconds and gradually recovers the configured lookback (default: one day). EV exclusion uses joint meter / Ohme coverage within raw retention, omitting the minute either side of recorded charging starts/stops; it is an estimate, not total household load. Tokens stay in the backend database and private backups. Home Assistant must record this entity.</p>
     <div class="actions"><button id="settings-save" type="submit">Save settings</button><button id="test" class="secondary" type="button">Test connectivity</button><button id="ha-test" class="secondary" type="button">Test Home Assistant</button></div><p class="note">Testing connectivity does not save settings or start polling. Save your meter settings, then use Start polling above or save with Enable polling checked.</p><p id="test-result" role="status"></p><p id="ha-test-result" role="status"></p></form></section>
-    </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main><footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div></div>`;
+    </main><main id="daily-page" hidden aria-label="Daily energy analysis"></main>
+    <main id="diagnostics-page" hidden><section><div class="page-heading"><div><p class="eyebrow">COLLECTION &amp; RECOVERY</p><h1>Collection history</h1></div></div>
+    <p class="note">Meter collection and recovery events, plus application warnings and errors, recorded from this version onward. Up to 10,000 events or 30 days are retained. Earlier container logs are not included. Exception details and credentials are not stored.</p>
+    <div class="actions"><button id="diagnostics-refresh" type="button">Refresh</button><button id="diagnostics-older" type="button" class="secondary" disabled>Load older</button></div>
+    <p id="diagnostics-status" role="status"></p><div class="table-scroll"><table><thead><tr><th scope="col">Time</th><th scope="col">Level</th><th scope="col">Source</th><th scope="col">Event</th></tr></thead><tbody id="diagnostics-events"></tbody></table></div></section></main>
+    <footer>${versionMarkup}Local storage. No third-party dashboard services. Keep backups private: they contain your API key and any saved Home Assistant token.</footer></div></div></div>`;
   fillSettings(); setRange(1440); fillAutoRefresh();
   bindThemeToggle();
   void loadTariff();
   dailyPage = new DailyPage(element("daily-page"), () => config, showError);
+  element("diagnostics-refresh").onclick = () => { void loadDiagnostics(); };
+  element("diagnostics-older").onclick = () => { void loadDiagnostics(true); };
   window.onhashchange = route; route();
   chart = new DemandChart(element("chart"), visible => {
     element("off-peak-key").hidden = !visible.offPeak;
