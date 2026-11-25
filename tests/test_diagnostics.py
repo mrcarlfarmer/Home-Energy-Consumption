@@ -31,9 +31,11 @@ async def test_diagnostics_persist_safe_messages_and_require_session(tmp_path: P
         ) as client,
     ):
         assert (await client.get("/api/diagnostics")).status_code == 401
-        assert (await client.post(
-            "/api/auth/login", json={"username": "admin", "password": "a-long-test-password"}
-        )).status_code == 200
+        assert (
+            await client.post(
+                "/api/auth/login", json={"username": "admin", "password": "a-long-test-password"}
+            )
+        ).status_code == 200
         logger = logging.getLogger("app.poller")
         logger.info("Collection completed: rows=%s changed=%s rejected=%s", 12, 4, 0)
         logger.warning("Unexpected secret: %s", "sensitive-value")
@@ -52,7 +54,10 @@ async def test_diagnostics_persist_safe_messages_and_require_session(tmp_path: P
     async with app.router.lifespan_context(app):
         events = await app.state.store.diagnostics(None, 100)
         assert any(event["message"] == "Request validation failed" for event in events)
-        assert any(event["message"] == "Request failed: code=session_required status=401" for event in events)
+        assert any(
+            event["message"] == "Request failed: code=session_required status=401"
+            for event in events
+        )
 
 
 async def test_diagnostics_reports_unavailable_storage(store: Store) -> None:

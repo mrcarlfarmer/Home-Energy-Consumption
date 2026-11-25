@@ -166,7 +166,9 @@ async def test_rejected_full_range_falls_back_without_losing_newer_data(store: S
         async with store.read() as conn:
             gap = await one(conn, "SELECT * FROM recovery_gaps")
             assert (gap["start_us"], gap["end_us"], gap["reason"]) == (
-                start, start + 900_000_000, "range_too_old"
+                start,
+                start + 900_000_000,
+                "range_too_old",
             )
         assert (await Analytics(store).summary(start + 900_000_000, end, "UTC"))[
             "coverage_pct"

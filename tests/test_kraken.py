@@ -50,9 +50,7 @@ async def test_single_flight_refresh_and_epoch_expiry() -> None:
 
 async def test_telemetry_accepts_large_bounded_recovery_responses() -> None:
     client = Kraken()
-    mock = AsyncMock(
-        return_value={"smartMeterTelemetry": [{"demand": 4000}] * 1001}
-    )
+    mock = AsyncMock(return_value={"smartMeterTelemetry": [{"demand": 4000}] * 1001})
     client.authenticated = mock  # type: ignore[method-assign]
     try:
         assert len(await client.telemetry("key", "device", "start", "end")) == 1001
@@ -67,7 +65,9 @@ async def test_telemetry_accepts_large_bounded_recovery_responses() -> None:
 async def test_large_telemetry_responses_remain_byte_bounded() -> None:
     payload = b'{"data":{"smartMeterTelemetry":[]}, "padding":"' + b"x" * 1_100_000 + b'"}'
     client = Kraken(
-        httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=payload)))
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, content=payload))
+        )
     )
     try:
         assert await client.execute(TELEMETRY, {}) == {"smartMeterTelemetry": []}

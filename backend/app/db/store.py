@@ -175,8 +175,13 @@ class Store:
             ) as cur:
                 rows = await cur.fetchall()
         return [
-            {"id": row["id"], "at": iso(row["at_us"]), "level": row["level"],
-             "source": row["source"], "message": row["message"]}
+            {
+                "id": row["id"],
+                "at": iso(row["at_us"]),
+                "level": row["level"],
+                "source": row["source"],
+                "message": row["message"],
+            }
             for row in rows
         ]
 

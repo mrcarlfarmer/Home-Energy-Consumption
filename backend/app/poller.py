@@ -337,7 +337,7 @@ class Poller:
                             "auth_error" if exc.auth else "configuration_error"
                         )
                         delay = 0
-                    log.warning(                    "Collection failed: code=%s retry_seconds=%s", exc.code, delay)
+                    log.warning("Collection failed: code=%s retry_seconds=%s", exc.code, delay)
                 except StoragePressure:
                     self.health.update(
                         polling_state="storage_paused",

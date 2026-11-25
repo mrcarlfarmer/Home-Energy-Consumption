@@ -213,14 +213,16 @@ def create_app(
                     callback()
 
             if settings.start_workers:
-                tasks.extend([
-                    asyncio.create_task(poller.run()),
-                    asyncio.create_task(store.maintenance()),
-                    asyncio.create_task(poller.health_timer()),
-                    asyncio.create_task(ev_collector.run()),
-                    asyncio.create_task(ev_collector.run_live()),
-                    asyncio.create_task(tariff_pricing.run()),
-                ])
+                tasks.extend(
+                    [
+                        asyncio.create_task(poller.run()),
+                        asyncio.create_task(store.maintenance()),
+                        asyncio.create_task(poller.health_timer()),
+                        asyncio.create_task(ev_collector.run()),
+                        asyncio.create_task(ev_collector.run_live()),
+                        asyncio.create_task(tariff_pricing.run()),
+                    ]
+                )
                 if settings.auth_required:
                     tasks.append(asyncio.create_task(app.state.auth.watch_password()))
                 for task in tasks:
