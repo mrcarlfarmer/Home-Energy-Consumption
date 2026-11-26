@@ -21,7 +21,7 @@ flowchart LR
 
 ## Data flow
 
-The collector retrieves an overlapping `TEN_SECONDS` window at a default 45-second interval. It validates native timestamps/units and idempotently upserts every returned reading, including corrections. Equivalent timestamp offsets normalize to one UTC key. Config revisions fence off in-flight results after device/key/toggle changes.
+The collector retrieves an overlapping `TEN_SECONDS` window at a default 120-second interval, extending it back to the last stored reading (up to one hour) when polls are delayed. It validates native timestamps/units and idempotently upserts every returned reading, including corrections. Equivalent timestamp offsets normalize to one UTC key. Config revisions fence off in-flight results after device/key/toggle changes.
 
 Raw changes mark affected retained five-minute buckets dirty, including the maximum
 supported adjacent-segment range. Maintenance atomically rebuilds coverage, energy,

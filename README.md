@@ -37,7 +37,37 @@ setting `ENERGY_DATA_DIRECTORY` for Compose.
 4. Set the build version from Git and run `docker compose up -d --build`, following the [deployment commands](docs/deployment.md).
 5. Open your configured HTTPS address on port 8443, sign in and enter your Octopus API key/account. Test connectivity to discover the electricity meter, select it, then save with polling enabled.
 
-The device ID is the **electricity smart meter EUI-64**, not the Home Mini serial number. Polling defaults to 45 seconds. No port forwarding or external dashboard service is required.
+The device ID is the **electricity smart meter EUI-64**, not the Home Mini serial number. Polling defaults to 120 seconds. No port forwarding or external dashboard service is required.
+
+## Back up the database before upgrading
+
+Backups contain your Octopus API key, password hash and session metadata. Keep
+them private on separate protected storage, with a finite retention policy.
+Do not copy the live SQLite database alone: it uses a WAL.
+
+For the Portainer stacks, stop the collector in Portainer, then run on the Pi.
+Replace `/opt/home-energy` with your configured `ENERGY_ROOT` and use the image
+of the stopped container, not the new image. Mount separate protected backup
+storage at `/srv/home-energy-backups` first:
+
+```sh
+ENERGY_ROOT=/opt/home-energy
+IMAGE_ID=$(docker inspect --format '{{.Image}}' home-energy)
+sudo install -d -m 700 -o 10001 -g 10001 /srv/home-energy-backups
+docker run --rm --network none --user 10001:10001 \
+  --memory 140m --memory-swap 140m \
+  --mount "type=bind,src=$ENERGY_ROOT/data,dst=/data" \
+  --mount type=bind,src=/srv/home-energy-backups,dst=/backup \
+  --entrypoint energy-admin "$IMAGE_ID" \
+  backup --output "/backup/energy-$(date +%Y%m%d-%H%M%S).sqlite3"
+```
+
+Confirm the backup command succeeds before upgrading; it checks the snapshot and
+refuses to overwrite a file. Restart the container in Portainer after the backup.
+For Compose deployments, use the [Compose backup instructions](docs/operations.md#backup).
+Keep the old image and its matching backup for rollback, and see
+[restore and upgrade](docs/operations.md#restore-and-upgrade) before restoring.
+Collection stops during backup; any gap is recoverable only if Kraken still has it.
 
 ## Exploring the graph
 
@@ -89,9 +119,9 @@ over the selected raw-history range (up to 31 days, normally 30), preserving any
 pending recovery work and excluding the newest three minutes.
 
 The collector skips fully supported leading fifteen-minute windows and requests
-the remaining range through the existing Octopus rate governor, processing the
-response locally in windows. Oversized responses or rejected old ranges fall back
-to smaller requests, alternating with live collection.
+the remaining range through the existing Octopus rate governor in requests of at
+most six hours, processing the response locally in windows. Recovery requests are
+spaced between live polls; oversized responses and some failures use smaller ranges.
 Once daily after 00:05 in the configured timezone, it also queues the previous
 complete local calendar day for that same rate-governed review.
 Watch the recovery status and Collection health; a long range can take many

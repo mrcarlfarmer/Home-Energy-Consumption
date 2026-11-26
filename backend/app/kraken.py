@@ -146,6 +146,8 @@ class Kraken:
                 raise KrakenError("rate_limited", retryable=True, delay=max(45, delay))
             if code in AUTH_CODES:
                 raise KrakenError("token_rejected", auth=True)
+            if code == "KT-GB-4039":
+                raise KrakenError("graphql_KT-GB-4039", retryable=True, delay=max(300, delay))
             if code == "KT-GB-4043":
                 raise KrakenError("upstream_network_error", retryable=True)
             if code == "KT-GB-4051":

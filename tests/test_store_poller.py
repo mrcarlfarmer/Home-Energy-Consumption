@@ -4,13 +4,14 @@ import json
 import sqlite3
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from app.cli import execute
 from app.db.store import Store, one
-from app.kraken import Kraken
-from app.models import ConfigUpdate, Reading, iso, now_us
+from app.kraken import Kraken, KrakenError
+from app.models import ConfigUpdate, Reading, iso, now_us, timestamp_us
 from app.poller import Poller
 from app.streaming import Hub
 from conftest import DEVICE
@@ -132,6 +133,48 @@ async def test_network_outage_enters_backoff_without_busy_retry(store: Store) ->
         assert snapshot["health"]["error_code"] == "network_unavailable"
         assert snapshot["health"]["next_attempt_at"] is not None
         assert calls == 1
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        await client.close()
+
+
+async def test_live_window_covers_delayed_polls(store: Store) -> None:
+    at = now_us()
+    latest = Reading.from_kraken({"readAt": iso(at - 600_000_000), "demand": 4000}, at)
+    await store.ingest(DEVICE, [latest], 2)
+    client = Kraken()
+    client.verify = AsyncMock()  # type: ignore[method-assign]
+    client.telemetry = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    try:
+        await Poller(store, client, Hub()).collect(await store.config())
+        args = client.telemetry.await_args.args
+        assert timestamp_us(args[2]) == latest.read_at_us - 180_000_000
+    finally:
+        await client.close()
+
+
+async def test_live_service_error_backs_off_and_recovers(store: Store) -> None:
+    client = Kraken()
+    poller = Poller(store, client, Hub())
+    poller.collect = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[KrakenError("graphql_KT-GB-4039", retryable=True, delay=300), None]
+    )
+    queue = poller.hub.subscribe()
+    queue.get_nowait()
+    task = asyncio.create_task(poller.run())
+    try:
+        async with asyncio.timeout(3):
+            _, snapshot = await queue.get()
+            health = snapshot["health"]
+            assert health["polling_state"] == "backoff"
+            assert health["error_code"] == "graphql_KT-GB-4039"
+            assert timestamp_us(health["next_attempt_at"]) >= now_us() + 299_000_000
+            poller.changed.set()
+            _, snapshot = await queue.get()
+            assert snapshot["health"]["polling_state"] == "running"
+            assert poller.collect.await_count == 2
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
