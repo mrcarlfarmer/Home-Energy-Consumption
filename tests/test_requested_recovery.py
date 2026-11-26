@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import sqlite3
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -18,6 +19,26 @@ from app.streaming import Hub
 from conftest import DEVICE
 from pydantic import SecretStr
 from test_analytics import readings
+
+
+@pytest.mark.parametrize(("old_interval", "new_interval"), [(45, 120), (90, 90)])
+async def test_upgrade_resumes_service_failure_and_preserves_other_settings(
+    store: Store, old_interval: int, new_interval: int
+) -> None:
+    start = now_us() - 3600_000_000
+    await store.request_recovery(DEVICE, start, start + 900_000_000, 2)
+    await store.pause_recovery(DEVICE, 2, "graphql_KT-GB-4039")
+    async with store.write() as conn:
+        await conn.execute("UPDATE app_config SET poll_interval_seconds=?", (old_interval,))
+    path = store.path
+    await store.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA user_version=10")
+    await store.open()
+    state = await store.recovery(DEVICE)
+    assert state["status"] == "pending" and state["cursor_us"] == start
+    assert state["error_code"] is None
+    assert (await store.config())["poll_interval_seconds"] == new_interval
 
 
 async def test_requested_recovery_repairs_internal_gaps_and_refreshes_metrics(store: Store) -> None:
@@ -131,7 +152,7 @@ async def test_long_recovery_processing_allows_live_collection(
     poller = Poller(store, client, Hub())
     live = AsyncMock()
     poller.collect = live  # type: ignore[method-assign]
-    clock = iter((0.0, 61.0, 61.0))
+    clock = iter((0.0, 121.0, 121.0))
     monkeypatch.setattr("app.poller.monotonic", lambda: next(clock))
     try:
         await poller.recover(await store.config())
@@ -190,9 +211,73 @@ async def test_oversized_recovery_response_retries_in_bounded_ranges(store: Stor
         await poller.recover(config)
         assert (await store.recovery(DEVICE))["cursor_us"] == start
         await poller.recover(config)
-        assert timestamp_us(mock.await_args_list[1].args[3]) == start + DAY_US + 10_000_000
-        assert (await store.recovery(DEVICE))["cursor_us"] == start + DAY_US
+        assert timestamp_us(mock.await_args_list[1].args[3]) == start + 3600_000_000 + 10_000_000
+        assert (await store.recovery(DEVICE))["cursor_us"] == start + 3600_000_000
     finally:
+        await client.close()
+
+
+async def test_service_failure_shrinks_recovery_without_advancing_cursor(store: Store) -> None:
+    start = now_us() - 3 * DAY_US
+    await store.request_recovery(DEVICE, start, start + DAY_US, 2)
+    client = Kraken()
+    mock = AsyncMock(side_effect=[KrakenError("graphql_KT-GB-4039", retryable=True, delay=300), []])
+    client.telemetry = mock  # type: ignore[method-assign]
+    poller = Poller(store, client, Hub())
+    try:
+        config = await store.config()
+        with pytest.raises(KrakenError, match="graphql_KT-GB-4039"):
+            await poller.recover(config)
+        assert (await store.recovery(DEVICE))["cursor_us"] == start
+        assert (
+            timestamp_us(mock.await_args_list[0].args[3]) == start + 6 * 3600_000_000 + 10_000_000
+        )
+        await poller.recover(config)
+        assert timestamp_us(mock.await_args_list[1].args[3]) == start + 3600_000_000 + 10_000_000
+    finally:
+        await client.close()
+
+
+async def test_recovery_service_backoff_keeps_live_collection_running(
+    store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = now_us() - 3600_000_000
+    await store.request_recovery(DEVICE, start, start + 900_000_000, 2)
+    client = Kraken()
+    poller = Poller(store, client, Hub())
+    poller.collect = AsyncMock()  # type: ignore[method-assign]
+    poller.recover = AsyncMock(  # type: ignore[method-assign]
+        side_effect=KrakenError("graphql_KT-GB-4039", retryable=True, delay=300)
+    )
+    clock = [1000.0]
+    monkeypatch.setattr("app.poller.monotonic", lambda: clock[0])
+    queue = poller.hub.subscribe()
+    queue.get_nowait()
+    task = asyncio.create_task(poller.run())
+    try:
+        async with asyncio.timeout(3):
+            await queue.get()
+            poller.changed.set()
+            _, failed = await queue.get()
+            assert failed["health"]["polling_state"] == "running"
+            assert (await store.recovery(DEVICE))["status"] == "pending"
+            assert (await store.recovery(DEVICE))["cursor_us"] == start
+            for _ in range(6):
+                poller.changed.set()
+                await queue.get()
+            assert poller.recover.await_count == 1
+            assert poller.collect.await_count == 7
+            clock[0] += 601
+            poller.changed.set()
+            await queue.get()
+            poller.changed.set()
+            await queue.get()
+            assert poller.recover.await_count == 2
+            assert poller.recovery_retry_at == clock[0] + 1200
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
         await client.close()
 
 

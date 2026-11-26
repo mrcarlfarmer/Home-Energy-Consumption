@@ -107,6 +107,36 @@ async def test_graphql_throttle_and_cooldown() -> None:
         await client.close()
 
 
+async def test_telemetry_service_availability_error_is_retryable() -> None:
+    client = Kraken(
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    headers={"Retry-After": "900"},
+                    json={
+                        "errors": [
+                            {
+                                "extensions": {
+                                    "errorType": "SERVICE_AVAILABILITY",
+                                    "errorCode": "KT-GB-4039",
+                                }
+                            }
+                        ]
+                    },
+                )
+            )
+        )
+    )
+    try:
+        with pytest.raises(KrakenError) as exc:
+            await client.execute(TELEMETRY, {})
+        assert exc.value.code == "graphql_KT-GB-4039"
+        assert exc.value.retryable and exc.value.delay == 900
+    finally:
+        await client.close()
+
+
 @pytest.mark.parametrize("graphql", [False, True])
 async def test_one_authentication_retry(graphql: bool) -> None:
     tokens, queries = 0, 0

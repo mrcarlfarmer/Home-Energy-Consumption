@@ -12,10 +12,13 @@ import aiosqlite
 from app.db.store import Store, one
 from app.kraken import Kraken, KrakenError
 from app.models import Reading, iso, now_us, timestamp_us
-from app.storage import DAY_US, StoragePressure
+from app.storage import StoragePressure
 from app.streaming import Hub
 
 log = logging.getLogger(__name__)
+
+RECOVERY_SPAN_US = 6 * 3600_000_000
+RECOVERY_INTERVAL_POLLS = 5
 
 
 def daily_recovery_window(at: int, timezone: str) -> tuple[str, int, int] | None:
@@ -57,7 +60,10 @@ class Poller:
         self.task: asyncio.Task[None] | None = None
         self.inflight: asyncio.Task[None] | None = None
         self.recovery_due = False
-        self.recovery_max_span = 31 * DAY_US
+        self.recovery_max_span = RECOVERY_SPAN_US
+        self.live_since_recovery = RECOVERY_INTERVAL_POLLS
+        self.recovery_retry_at = 0.0
+        self.recovery_failures = 0
         self.ev_health: dict[str, Any] | None = None
 
     async def publish(self) -> None:
@@ -123,7 +129,10 @@ class Poller:
     async def reconfigure(self) -> None:
         self.changed.set()
         self.recovery_due = False
-        self.recovery_max_span = 31 * DAY_US
+        self.recovery_max_span = RECOVERY_SPAN_US
+        self.live_since_recovery = RECOVERY_INTERVAL_POLLS
+        self.recovery_retry_at = 0.0
+        self.recovery_failures = 0
         if self.inflight is not None:
             self.inflight.cancel()
         await self.store.resume_recovery()
@@ -146,7 +155,11 @@ class Poller:
             )
         latest = await self.store.latest(device)
         await self.store.plan_recovery(device, at, latest["read_at_us"] if latest else None)
-        start = at - 180_000_000
+        start = (
+            max(at - 3600_000_000, min(at - 180_000_000, latest["read_at_us"] - 180_000_000))
+            if latest
+            else at - 180_000_000
+        )
         log.info("Collection started: from=%s to=%s", iso(start), iso(at))
         try:
             rows = await self.client.telemetry(
@@ -191,7 +204,7 @@ class Poller:
         device = config["active_device_id"]
         state = await self.store.recovery(device)
         if state is None or state["status"] != "pending":
-            self.recovery_max_span = 31 * DAY_US
+            self.recovery_max_span = RECOVERY_SPAN_US
             await self.collect(config)
             return
         # Skip already supported history without spending another upstream request.
@@ -205,7 +218,7 @@ class Poller:
             await self.store.finish_recovery_chunk(device, start, end, config["revision"], None)
             state = await self.store.recovery(device)
             if state is None or state["status"] != "pending":
-                self.recovery_max_span = 31 * DAY_US
+                self.recovery_max_span = RECOVERY_SPAN_US
                 return
         else:
             return
@@ -222,10 +235,17 @@ class Poller:
                 config["poll_interval_seconds"],
             )
         except KrakenError as exc:
-            if exc.code == "upstream_response_too_large" and request_end > end:
-                self.recovery_max_span = DAY_US if request_end - start > DAY_US else 900_000_000
-                log.warning("Historical response too large; retrying in smaller ranges")
-                return
+            if (
+                exc.code in ("upstream_response_too_large", "graphql_KT-GB-4039")
+                and request_end > end
+            ):
+                self.recovery_max_span = (
+                    3600_000_000 if request_end - start > 3600_000_000 else 900_000_000
+                )
+                log.warning("Historical request failed; retrying in smaller ranges: %s", exc.code)
+                if exc.code == "upstream_response_too_large":
+                    return
+                raise
             if exc.code != "range_too_old":
                 raise
             if request_end > end:
@@ -288,7 +308,7 @@ class Poller:
                     return
                 next_live = monotonic() + config["poll_interval_seconds"]
         if state["status"] != "pending":
-            self.recovery_max_span = 31 * DAY_US
+            self.recovery_max_span = RECOVERY_SPAN_US
         self.health.update(
             error_code=None,
             consecutive_failures=0,
@@ -309,7 +329,19 @@ class Poller:
                     operation = self.recover if self.recovery_due else self.collect
                     self.inflight = asyncio.create_task(operation(config))
                     await self.inflight
-                    self.recovery_due = not self.recovery_due
+                    if self.recovery_due:
+                        self.recovery_due = False
+                        self.live_since_recovery = 0
+                        self.recovery_failures = 0
+                        self.recovery_retry_at = 0.0
+                    else:
+                        self.live_since_recovery += 1
+                        if (
+                            self.live_since_recovery >= RECOVERY_INTERVAL_POLLS
+                            and monotonic() >= self.recovery_retry_at
+                        ):
+                            state = await self.store.recovery(config["active_device_id"])
+                            self.recovery_due = state is not None and state["status"] == "pending"
                 except asyncio.CancelledError:
                     if not self.changed.is_set():
                         raise
@@ -323,12 +355,27 @@ class Poller:
                     )
                     historical = self.recovery_due
                     self.recovery_due = False
+                    if exc.code == "graphql_KT-GB-4039" and not historical:
+                        delay = max(delay, min(1800, 300 * 2 ** (failures - 1)))
+                    if historical and exc.retryable:
+                        self.recovery_failures = min(self.recovery_failures + 1, 6)
+                        self.recovery_retry_at = monotonic() + max(
+                            exc.delay, min(21600, 600 * 2 ** (self.recovery_failures - 1))
+                        )
+                        self.live_since_recovery = 0
+                        if exc.code != "rate_limited":
+                            delay = max(
+                                config["poll_interval_seconds"],
+                                exc.delay if exc.code != "graphql_KT-GB-4039" else 0,
+                            )
                     if historical and not exc.retryable and not exc.auth:
                         await self.store.pause_recovery(
                             config["active_device_id"],
                             config["revision"],
                             exc.code,
                         )
+                        self.health["polling_state"] = "running"
+                    elif historical and exc.retryable and exc.code != "rate_limited":
                         self.health["polling_state"] = "running"
                     elif exc.retryable or exc.code == "range_too_old":
                         self.health["polling_state"] = "backoff"

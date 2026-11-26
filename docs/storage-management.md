@@ -32,6 +32,11 @@ cursor, preserving previously queued work. Back up before this upgrade too;
 applications supporting only schema 6 or earlier require the matching backup
 for rollback.
 
+Schema 11 changes the previous 45-second polling setting to 120 seconds, leaves
+other configured intervals unchanged, and resumes recovery paused specifically
+by `graphql_KT-GB-4039`. Back up before upgrading; older applications reject
+schema 11 and require a compatible backup for rollback.
+
 ## Prepare a new bounded filesystem on the Pi
 
 Take a consistent backup first, then stop the old container. These commands run on
@@ -178,11 +183,16 @@ animation stops until collection can proceed again.
 
 Before live collection, the collector persists a recovery cursor/target per meter.
 On first setup it attempts the configured horizon; following downtime it starts
-from the prior latest sample. A recovery request fetches the remaining range in
-one call, up to 31 days, then processes it locally in fifteen-minute windows and
-bounded ingestion batches. Recovery and live requests share the rate governor and
-alternate when more recovery work remains. Small overlaps account for ten-second
-bucket rounding; source timestamps deduplicate retries. Cursor advancement occurs
+from the prior latest sample. A recovery request fetches up to six hours at a time,
+then processes it locally in fifteen-minute windows and bounded ingestion batches.
+Recovery and live requests share the rate governor. After the first live poll,
+recovery can take the next scheduled slot; subsequent recovery requests are spaced
+by at least five live polls. Recovery replaces a live slot rather than adding calls.
+At the default 120-second interval this is approximately 30 telemetry requests per
+hour, with a possible four-minute gap between live polls during recovery. The live
+window extends back to the last stored reading, up to one hour, to cover such gaps.
+Other applications can consume the same upstream allowance. Small overlaps account
+for ten-second bucket rounding; source timestamps deduplicate retries. Cursor advancement occurs
 only after ingestion, so a crash can repeat work safely. Revision/device changes
 fence ingestion and progress updates. Long local processing pauses between windows
 to perform live collection when the polling interval has elapsed.
@@ -221,7 +231,7 @@ back. Unlike initial automatic recovery, an explicitly requested older range is
 not shortened to the default one-day lookback. Pending work is preserved and the
 cursor survives restarts. Already supported leading fifteen-minute windows are
 skipped, with at most 96 local checks per worker turn; upstream calls remain
-serialized through the same governor and alternate with live collection. There is
+serialized through the same governor and spaced between live polls. There is
 no promise that Octopus still retains every requested reading.
 
 Recovered readings deduplicate and invalidate affected rollups normally. The

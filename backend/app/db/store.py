@@ -105,6 +105,7 @@ class Store:
                         "008_ev_bonus_rates.sql",
                         "009_daily_recovery.sql",
                         "010_diagnostics.sql",
+                        "011_reliable_collection.sql",
                     )
                     if version > len(migrations):
                         raise RuntimeError("Database schema is newer than this application")

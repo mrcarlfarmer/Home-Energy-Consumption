@@ -2,9 +2,11 @@
 
 ## Collection and troubleshooting
 
-Live polls request a recent three-minute window. Persistent, rate-governed backfill
-requests the remaining historical range (up to 31 days) in one call and processes
-it in fifteen-minute windows, within the configured lookback (one day by default).
+Live polls request at least three minutes, extending back from the latest stored
+reading with overlap, up to one hour. The default interval is 120 seconds.
+Persistent, rate-governed backfill requests at most six hours at a time and
+processes results in fifteen-minute windows. Automatic recovery uses the configured
+lookback (one day by default); explicit recovery can request older retained history.
 Oversized responses or rejected old ranges are retried in smaller requests.
 All rows are deduplicated by
 device/native timestamp. Unresolved/partial intervals remain visible and are not
@@ -22,6 +24,15 @@ lost because storage or the diagnostic queue was unavailable. Earlier messages
 remain in Portainer's container logs only, subject to Docker log rotation.
 
 Token refresh is single-flight and proactive. A rejected token gets one renewal/operation retry. Persistent auth/configuration failures stop automatic retries until settings change or a successful test of the saved credentials resumes already-enabled polling. HTTP and GraphQL throttling share cooldowns with connectivity tests. Transient failures use bounded exponential backoff/jitter and respect vendor retry timing.
+
+`graphql_KT-GB-4039` is a telemetry service-availability error, not a confirmed
+rate-limit response. Live collection retries after at least five minutes, backing
+off to 30 minutes on repeated failures, or longer if requested by the server.
+Historical failures retain the cursor, reduce the request size and defer another
+recovery attempt for at least ten minutes, while live collection continues.
+Check the Home Mini and network if failures persist.
+The limit is shared with other apps; 120-second polling alone uses about 30
+telemetry requests per hour and does not guarantee unused account quota.
 
 Kraken's GraphQL `KT-CT-1143` (invalid Authorization credential) is treated as a
 rejected access token, including when returned with HTTP 200: renew once and retry
